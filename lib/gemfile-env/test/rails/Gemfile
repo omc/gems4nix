@@ -1,0 +1,87 @@
+source 'https://rubygems.org'
+git_source(:github) { |repo| "https://github.com/#{repo}.git" }
+
+# private gems are annoying
+source 'https://rubygems.pkg.github.com/omc' do
+  gem 'omc-commons'
+end
+
+# a whole arbitrary smattering of gems from a moderately sized rails app
+gem 'abbrev'
+gem 'bcrypt'
+gem 'bootsnap', require: false
+gem 'csv'
+gem 'errgonomic'
+gem 'hubspot-api-client'
+gem 'jbuilder'
+gem 'octokit'
+gem 'omniauth'
+gem 'omniauth-github'
+gem 'omniauth-google-oauth2'
+gem 'omniauth-rails_csrf_protection'
+gem 'opensearch-ruby'
+gem 'ostruct'
+gem 'pg'
+gem 'postmark-rails'
+gem 'progressbar', require: false
+gem 'puma'
+gem 'rails', '~> 8.0'
+gem 'redis', '~> 4.0'
+gem 'requestjs-rails'
+gem 'rollout'
+gem 'ruby-saml'
+gem 'sidekiq'
+gem 'state_machines-activerecord'
+gem 'state_machines-audit_trail'
+gem 'stimulus-rails'
+gem 'stripe', '~> 10.11'
+gem 'turbo-rails', '~> 2.0'
+gem 'tzinfo-data', platforms: %i[mingw mswin x64_mingw jruby]
+
+group :production, :staging do
+  gem 'sentry-rails'
+  gem 'sentry-ruby'
+  gem 'sentry-sidekiq'
+end
+
+group :development, :test do
+  gem 'brakeman'
+  gem 'bundler-audit'
+  gem 'debug', platforms: %i[mri mingw x64_mingw]
+  gem 'dotenv-rails'
+  gem 'faker'
+  gem 'guard'
+  gem 'guard-minitest'
+  gem 'mail_safe'
+  gem 'minitest-rails', '~> 8.0'
+  gem 'minitest-reporters'
+  gem 'mocha'
+  gem 'mock_redis'
+  gem 'rubocop'
+  gem 'rubocop-performance'
+  gem 'ruby-lsp'
+  gem 'simplecov', require: false
+  gem 'simplecov-lcov', require: false
+  gem 'sorbet' # special attention to this multi platform monster
+  gem 'sorbet-rails'
+  gem 'yard'
+end
+
+group :development do
+  gem 'annotaterb'
+  gem 'better_errors'
+  gem 'binding_of_caller'
+  gem 'erb_lint'
+  gem 'hotwire-livereload'
+  gem 'htmlbeautifier'
+  gem 'solargraph'
+  gem 'solargraph-rails'
+  gem 'web-console'
+end
+
+group :test do
+  gem 'cucumber-rails', require: false
+  gem 'database_cleaner-active_record', require: false
+  gem 'webmock'
+  gem 'webrick'
+end
