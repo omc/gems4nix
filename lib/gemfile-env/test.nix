@@ -4,6 +4,9 @@ let
     url = "https://github.com/NixOS/nixpkgs/archive/nixos-24.11.tar.gz";
   }) { };
   gemEnv = nixpkgs.callPackage ./default.nix { };
-  test = gemEnv { gemfileLock = ./test/rails/Gemfile.lock; };
+  test = gemEnv {
+    gemfile = ./test/rails/Gemfile;
+    gemfileLock = ./test/rails/Gemfile.lock;
+  };
 in
 test

@@ -1,8 +1,15 @@
 # callPackage definitions:
-{ lib, ... }:
+{
+  lib,
+  runCommand,
+  ruby,
+  bundler,
+  ...
+}:
 
 # function arguments:
 {
+  gemfile,
   gemfileLock,
   platforms ? [ "ruby" ],
   ...
@@ -104,6 +111,21 @@ let
       inherit remote gems;
     };
 
+  # use the Gemfile to produce group information for each gem
+  gemGroupsJson =
+    runCommand "gem-groups-json"
+      {
+        buildInputs = [
+          ruby
+          bundler
+        ];
+      }
+      ''
+        cp ${gemfile} Gemfile
+        cp ${gemfileLock} Gemfile.lock
+        ruby ${./gem-groups.rb} > $out
+      '';
+
   # inputs
   content = builtins.readFile (gemfileLock);
   lines = lib.splitString "\n" content;
@@ -132,16 +154,23 @@ let
     )
   );
 
-  # merge the checksummed gems with a url constructed from their remotes
-  # [ { hash = "830f2eb10..."; name = "sorbet-static"; platform = "universal-darwin"; url = "https://rubygems.org/gems/sorbet-static-0.5.12070.gem"; version = "0.5.12070"; } ... ]
+  # a map of gem names to urls
+  gemUrls = builtins.listToAttrs (
+    lib.lists.map (gem: {
+      name = gem.name;
+      value = "${gemRemotes.${gem.name}}gems/${gem.name}-${gem.version}.gem";
+    }) checksumSection
+  );
+
+  # parse the group information that we have generated from the Gemfile
+  gemGroups = builtins.fromJSON (builtins.readFile gemGroupsJson);
+
+  # merge the checksummed gems with their urls and groups
   gems = lib.lists.map (
     gem:
     {
-      url =
-        let
-          remote = gemRemotes.${gem.name};
-        in
-        "${remote}gems/${gem.name}-${gem.version}.gem";
+      url = gemUrls.${gem.name};
+      groups = gemGroups.${gem.name};
     }
     // gem
   ) checksumSection;

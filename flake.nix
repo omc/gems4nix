@@ -48,7 +48,12 @@
         { pkgs, ... }:
         {
           default = pkgs.mkShell {
-            packages = [ ];
+            packages = [
+              pkgs.ruby
+              pkgs.bundler
+              pkgs.rubyPackages.solargraph
+              pkgs.rubyPackages.rubocop
+            ];
           };
         }
       );
