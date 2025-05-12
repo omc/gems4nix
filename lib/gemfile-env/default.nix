@@ -8,6 +8,14 @@
   buildRubyGem,
   defaultGemConfig,
   buildEnv,
+
+  # nokogiri
+  zlib,
+  libxml2,
+  libxslt,
+  libiconv,
+
+  # debug
   ...
 }:
 
@@ -23,6 +31,7 @@
     "production"
     "test"
   ],
+  # this isn't coming in the way I expect...
   gemConfig ? defaultGemConfig,
   ...
 }:
@@ -38,11 +47,56 @@ let
   gemsForGroups = builtins.filter (filterGroup groups) gemMetadata;
   gemsForGroupsAndPlatforms = builtins.filter (filterPlatform platforms) gemsForGroups;
 
+  # _foo = builtins.trace defaultGemConfig defaultGemConfig;
+
   # TODO figure out how to use ruby-modules/bundled-common/functions.nix
   applyGemConfigs =
     attrs: (if gemConfig ? ${attrs.gemName} then attrs // gemConfig.${attrs.gemName} attrs else attrs);
 
-  gems = lib.lists.map (gemAttrs: buildRubyGem (applyGemConfigs gemAttrs)) gemsForGroupsAndPlatforms;
+  # customize nokogiri config to add --gumbo-dev build option
+  # TODO: fix upstream or make bits of gemConfig more accessible via gemEnv
+  gemConfig = defaultGemConfig // {
+    nokogiri =
+      attrs:
+      (
+        {
+          buildFlags =
+            [
+              "--use-system-libraries"
+              "--with-zlib-lib=${zlib.out}/lib"
+              "--with-zlib-include=${zlib.dev}/include"
+              "--with-xml2-lib=${libxml2.out}/lib"
+              "--with-xml2-include=${libxml2.dev}/include/libxml2"
+              "--with-xslt-lib=${libxslt.out}/lib"
+              "--with-xslt-include=${libxslt.dev}/include"
+              "--with-exslt-lib=${libxslt.out}/lib"
+              "--with-exslt-include=${libxslt.dev}/include"
+              "--gumbo-dev"
+            ]
+            ++ lib.optionals stdenv.hostPlatform.isDarwin [
+              "--with-iconv-dir=${libiconv}"
+              "--with-opt-include=${libiconv}/include"
+            ];
+        }
+        // lib.optionalAttrs stdenv.hostPlatform.isDarwin {
+          buildInputs = [ libxml2 ];
+
+          # libxml 2.12 upgrade requires these fixes
+          # https://github.com/sparklemotion/nokogiri/pull/3032
+          # which don't trivially apply to older versions
+          meta.broken =
+            (lib.versionOlder attrs.version "1.16.0") && (lib.versionAtLeast libxml2.version "2.12");
+        }
+      );
+  };
+
+  gems = lib.lists.map (
+    gemAttrs:
+    let
+      attrs = (applyGemConfigs gemAttrs);
+    in
+    buildRubyGem attrs
+  ) gemsForGroupsAndPlatforms;
 
 in
 buildEnv {

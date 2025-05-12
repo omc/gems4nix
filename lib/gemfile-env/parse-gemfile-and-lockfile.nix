@@ -184,7 +184,13 @@ let
       platform # todo: multiple platforms?
       version
       ;
-    groups = gemGroups.${gemAttrs.gemName};
+
+    # todo: with nokogiri, mini_portile2 shows up in the lock but didn't make
+    # its way into my gem groups parser. that's okay because it's a build-time
+    # dependency that we don't actually need. but still. what's the proper
+    # fallback in a case like this? when can these happen?
+    groups = gemGroups.${gemAttrs.gemName} or [ ];
+
     source = gemAttrs.source // {
       remotes = [ gemRemotes.${gemAttrs.gemName} ]; # todo multiple remotes?
       type = "gem"; # todo different types; git; source
