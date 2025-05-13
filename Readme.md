@@ -43,5 +43,6 @@ This is a few days of coding. It's being used in prod but for a specific Rails a
 - bundlerEnv has a much more complicated (generalizable?) buildEnv, need to study the differences.
 - Better conventions for filtering platforms. Cf., [ffi](https://rubygems.org/gems/ffi/versions) and [nokogiri](https://rubygems.org/gems/nokogiri/versions).
 - In all cases, we need better testing, I've been yolo `nix eval` and `nix build`ing it.
+- We rely on `buildRubyGems` and should verify a minimum supported version of nixpkgs for its behavior.
 
 Once these are in a good place, I'm also thinking about pre Bundler 2.6 backwards compatibility. Maybe this is worth its own standalone tool to generate the hashes, if we have created compelling solutions to the other quirks present in Bundix.

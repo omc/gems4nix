@@ -1,89 +1,155 @@
-# frozen_string_literal: true
-
-source 'https://rubygems.org'
+source "https://rubygems.org"
 git_source(:github) { |repo| "https://github.com/#{repo}.git" }
 
-# private gems are annoying
-source 'https://rubygems.pkg.github.com/omc' do
-  gem 'omc-commons'
+ruby "3.3.5"
+
+gem "rails", "~> 8.0"
+
+# The original asset pipeline for Rails [https://github.com/rails/sprockets-rails]
+# TODO: [PROD-171] Look at moving to propshaft
+gem "sprockets-rails"
+
+gem "pg"
+
+# Use the Puma web server [https://github.com/puma/puma]
+gem "puma"
+
+# Use JavaScript with ESM import maps [https://github.com/rails/importmap-rails]
+gem "importmap-rails"
+
+# Hotwire's SPA-like page accelerator [https://turbo.hotwired.dev]
+gem "turbo-rails", "~> 2.0"
+
+# Hotwire's modest JavaScript framework [https://stimulus.hotwired.dev]
+gem "stimulus-rails"
+
+# Encapsulates the logic to send by default some headers that are required by
+# rails applications like the X-CSRF-Token.
+# [https://github.com/rails/requestjs-rails]
+gem "requestjs-rails"
+
+# Github Package Repository - OMC Private Gems
+source "https://rubygems.pkg.github.com/omc" do
+  gem "depot", "~> 1.4.0"
 end
 
-# a whole arbitrary smattering of gems from a moderately sized rails app
-gem 'abbrev'
-gem 'bcrypt'
-gem 'bootsnap', require: false
-gem 'csv'
-gem 'errgonomic'
-gem 'hubspot-api-client'
-gem 'jbuilder'
-gem 'octokit'
-gem 'omniauth'
-gem 'omniauth-github'
-gem 'omniauth-google-oauth2'
-gem 'omniauth-rails_csrf_protection'
-gem 'opensearch-ruby'
-gem 'ostruct'
-gem 'pg'
-gem 'postmark-rails'
-gem 'progressbar', require: false
-gem 'puma'
-gem 'rails', '~> 8.0'
-gem 'redis', '~> 4.0'
-gem 'requestjs-rails'
-gem 'rollout'
-gem 'ruby-saml'
-gem 'sidekiq'
-gem 'state_machines-activerecord'
-gem 'state_machines-audit_trail'
-gem 'stimulus-rails'
-gem 'stripe', '~> 10.11'
-gem 'turbo-rails', '~> 2.0'
-gem 'tzinfo-data', platforms: %i[mingw mswin x64_mingw jruby]
+# For search
+# TODO: [PROD-172] Remove this in favor of BonsaiSearch
+gem "opensearch-ruby"
 
-group :production, :staging do
-  gem 'sentry-rails'
-  gem 'sentry-ruby'
-  gem 'sentry-sidekiq'
-end
+# Build JSON APIs with ease [https://github.com/rails/jbuilder]
+gem "jbuilder"
+
+# Redis for Action Cable and Rollout
+gem "redis", "~> 4.0"
+gem "rollout"
+
+# Standard libraries being removed from Ruby 3.5.0
+gem "abbrev"
+gem "csv"
+gem "ostruct"
+
+gem "progressbar", require: false
+
+# Use Active Model has_secure_password
+# [https://guides.rubyonrails.org/active_model_basics.html#securepassword]
+gem "bcrypt"
+
+gem "amplitude-api" # Analytics & Event Tracking https://github.com/toothrot/amplitude-api
+
+gem "octokit" # Github API
+gem "omniauth"
+gem "omniauth-google-oauth2" # google auth for admin
+gem "omniauth-github" # github auth for admin
+gem "omniauth-rails_csrf_protection" # CVE-2015-9284
+gem "ruby-saml" # SAML login
+
+gem "sidekiq" # background job processing
+gem "state_machines-activerecord" # state machine
+gem "state_machines-audit_trail" # state machine history
+
+# Windows does not include zoneinfo files, so bundle the tzinfo-data gem
+gem "tzinfo-data", platforms: %i[mingw mswin x64_mingw jruby]
+
+# Reduces boot times through caching; required in config/boot.rb
+gem "bootsnap", require: false
+
+gem "hubspot-api-client" # V3 Hubspot API https://github.com/HubSpot/hubspot-api-ruby
+gem "postmark-rails" # for sending emails
+gem "stripe", "~> 10.11" # Stripe API https://github.com/stripe/stripe-ruby
+gem "zendesk_api" # Zendesk integration https://github.com/zendesk/zendesk_api_client_rb
+
+# Frontendy things
+gem "will_paginate"
+gem "prawn-rails", require: false # AWS S3
+gem "matrix" # to get prawn to load properly on app build
+gem "aws-sdk-s3", require: false # AWS S3
+
+# Generate Documentation [https://rubydoc.info/gems/yard/file/README.md]
+gem "yard"
+
+# For Bonsai Database migration
+gem "symmetric-encryption", require: false
+
+# Streaming large JSON payloads from others' APIs
+gem "json-streamer", require: false
+
+# Identify the browser and device from the user agent string
+gem "browser", "~> 5.3", require: "browser/browser"
+
+gem "errgonomic" # lightweight error handling ergonomics, omc/errgonomic
+
+# RFC: we seem to reference Sentry in dev; previously it was defined for production, staging
+gem "sentry-ruby" # error reporting and performance monitoring
+gem "sentry-rails" # rails specific sentry goodies
+gem "sentry-sidekiq" # sidekiq specific rails goodies
 
 group :development, :test do
-  gem 'brakeman'
-  gem 'bundler-audit'
-  gem 'debug', platforms: %i[mri mingw x64_mingw]
-  gem 'dotenv-rails'
-  gem 'faker'
-  gem 'guard'
-  gem 'guard-minitest'
-  gem 'mail_safe'
-  gem 'minitest-rails', '~> 8.0'
-  gem 'minitest-reporters'
-  gem 'mocha'
-  gem 'mock_redis'
-  gem 'rubocop'
-  gem 'rubocop-performance'
-  gem 'ruby-lsp'
-  gem 'simplecov', require: false
-  gem 'simplecov-lcov', require: false
-  gem 'sorbet' # special attention to this multi platform monster
-  gem 'sorbet-rails'
-  gem 'yard'
+  # Code analysis
+  gem "brakeman" # Brakeman analyzes our code for security vulnerabilities
+  gem "bundler-audit" # bundler-audit checks our dependencies for vulnerabilities
+  gem "debug", platforms: %i[mri mingw x64_mingw]
+
+  # Environment
+  gem "dotenv-rails"
+  gem "mail_safe"
+
+  # Testing
+  gem "faker"
+  gem "guard"
+  gem "guard-minitest"
+  gem "minitest-rails", "~> 8.0"
+  gem "minitest-reporters"
+  gem "mocha"
+  gem "mock_redis"
+  gem "rails-controller-testing" # `assigns` and `assert_template` for controller tests
+  gem "rubocop" # Ruby linting; see `.rubocop.yml`
+  gem "rubocop-performance"
+  gem "oaken"
+  gem "ruby-lsp"
+  gem "simplecov", require: false
+  gem "simplecov-lcov", require: false
 end
 
 group :development do
-  gem 'annotaterb'
-  gem 'better_errors'
-  gem 'binding_of_caller'
-  gem 'erb_lint'
-  gem 'hotwire-livereload'
-  gem 'htmlbeautifier'
-  gem 'solargraph'
-  gem 'solargraph-rails'
-  gem 'web-console'
+  gem "annotaterb" # comments with schemas on models - pairs with solargraph
+  gem "better_errors" # awesome error reports
+  gem "binding_of_caller" # repl in error pages
+  gem "hotwire-livereload"
+  gem "htmlbeautifier"
+  gem "solargraph-rails" # language server
+  gem "solargraph" # language server
+  gem "web-console" # Use console on exceptions pages [https://github.com/rails/web-console]
+  gem "erb_lint"
 end
 
 group :test do
-  gem 'cucumber-rails', require: false
-  gem 'database_cleaner-active_record', require: false
-  gem 'webmock'
-  gem 'webrick'
+  # Use system testing [https://guides.rubyonrails.org/testing.html#system-testing]
+  # gem "capybara"
+  # gem "selenium-webdriver"
+  # gem "webdrivers"
+  gem "cucumber-rails", require: false
+  gem "database_cleaner-active_record", require: false
+  gem "webmock"
+  gem "webrick" # mock third-party web servers when we care about the HTTP implementation (i.e., streaming)
 end

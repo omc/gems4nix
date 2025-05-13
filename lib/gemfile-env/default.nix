@@ -33,6 +33,7 @@
   ],
   # this isn't coming in the way I expect...
   gemConfig ? defaultGemConfig,
+  ruby ? ruby,
   ...
 }:
 let
@@ -90,7 +91,7 @@ let
       );
   };
 
-  gems = lib.lists.map (
+  allGems = lib.lists.map (
     gemAttrs:
     let
       attrs = (applyGemConfigs gemAttrs);
@@ -98,8 +99,26 @@ let
     buildRubyGem attrs
   ) gemsForGroupsAndPlatforms;
 
+  # we may have multiple gems with the same name, e.g., for different platforms
+  gemsByName = builtins.groupBy (g: g.gemName) allGems;
+
+  # resolve gems based on a preferred platform
+  platformResolvedGemsByName = builtins.mapAttrs (
+    gemName: gems:
+    let
+      otherPlatformGems = builtins.filter (g: g.platform != "ruby") gems;
+      rubyPlatformGems = builtins.filter (g: g.platform == "ruby") gems;
+    in
+    # TODO: noisy warning if we have more than one in either branch here
+    if otherPlatformGems != [ ] then
+      builtins.elemAt otherPlatformGems 0
+    else
+      builtins.elemAt rubyPlatformGems 0
+  ) gemsByName;
+
+  finalGems = lib.attrsets.mapAttrsToList (gemName: gem: gem) platformResolvedGemsByName;
 in
 buildEnv {
-  name = "gemfile-env-${lib.strings.concatStringsSep "-" groups}-${lib.strings.concatStringsSep "-" platforms}";
-  paths = gems;
+  name = "${name}-${lib.strings.concatStringsSep "-" groups}-${lib.strings.concatStringsSep "-" platforms}";
+  paths = finalGems;
 }
