@@ -6,8 +6,8 @@ let
   nixpkgs = import (fetchTarball {
     url = "https://github.com/NixOS/nixpkgs/archive/nixos-24.11.tar.gz";
   }) { };
-  gemEnv = nixpkgs.callPackage ./default.nix { };
-  test = gemEnv {
+  gemfileEnv = nixpkgs.callPackage ../lib/gemfile-env { };
+  test = gemfileEnv {
     name = "test-gem-env";
     gemfile = ./test/rails/Gemfile;
     gemfileLock = ./test/rails/Gemfile.lock;
