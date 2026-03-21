@@ -31,7 +31,6 @@
     "production"
     "test"
   ],
-  # this isn't coming in the way I expect...
   gemConfig ? defaultGemConfig,
   ruby ? ruby,
   ...
@@ -44,20 +43,15 @@ let
 
   # ── filtering (pure logic lives in filter-helpers.nix) ───────
   filterHelpers = import ./filter-helpers.nix { inherit lib; };
-  inherit (filterHelpers) filterGroup filterPlatform resolvePlatforms;
+  inherit (filterHelpers) filterGroup filterPlatform resolvePlatforms applyGemConfigs;
 
   gemsForGroups = builtins.filter (filterGroup groups) gemMetadata;
   gemsForGroupsAndPlatforms = builtins.filter (filterPlatform platforms) gemsForGroups;
 
-  # _foo = builtins.trace defaultGemConfig defaultGemConfig;
-
-  # TODO figure out how to use ruby-modules/bundled-common/functions.nix
-  applyGemConfigs =
-    attrs: (if gemConfig ? ${attrs.gemName} then attrs // gemConfig.${attrs.gemName} attrs else attrs);
-
-  # customize nokogiri config to add --gumbo-dev build option
-  # TODO: fix upstream or make bits of gemConfig more accessible via gemEnv
-  gemConfig = defaultGemConfig // {
+  # Merge user-supplied gemConfig with our local overrides (e.g., nokogiri).
+  # The user's config takes precedence: if they supply a nokogiri entry, it
+  # replaces ours. To layer on top of ours, they can import and extend it.
+  nokogiriConfig = {
     nokogiri =
       attrs:
       (
@@ -92,12 +86,12 @@ let
       );
   };
 
+  # Layer: defaultGemConfig < nokogiriConfig < user gemConfig
+  mergedGemConfig = defaultGemConfig // nokogiriConfig // gemConfig;
+
   allGems = lib.lists.map (
     gemAttrs:
-    let
-      attrs = (applyGemConfigs gemAttrs);
-    in
-    buildRubyGem attrs
+    buildRubyGem (applyGemConfigs mergedGemConfig gemAttrs)
   ) gemsForGroupsAndPlatforms;
 
   # resolve platform duplicates: prefer platform-specific over pure ruby

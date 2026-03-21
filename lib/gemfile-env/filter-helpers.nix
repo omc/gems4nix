@@ -13,6 +13,16 @@
   filterPlatform = platforms: gem:
     lib.lists.any (p: p == gem.platform) platforms;
 
+  # Apply per-gem configuration overrides from gemConfig.
+  # gemConfig is an attrset of { gemName = attrs: { ... }; ... }.
+  # If gemConfig has an entry for this gem, call it with the gem's attrs and
+  # merge the result. Otherwise return attrs unchanged.
+  applyGemConfigs = gemConfig: attrs:
+    if gemConfig ? ${attrs.gemName} then
+      attrs // gemConfig.${attrs.gemName} attrs
+    else
+      attrs;
+
   # Given a list of gems (possibly containing duplicates for different
   # platforms), resolve to one gem per name. Prefer platform-specific gems
   # over pure-ruby ones.

@@ -9,7 +9,7 @@ let
   }) { };
   lib = nixpkgs.lib;
   filterHelpers = import ../../lib/gemfile-env/filter-helpers.nix { inherit lib; };
-  inherit (filterHelpers) filterGroup filterPlatform resolvePlatforms;
+  inherit (filterHelpers) filterGroup filterPlatform resolvePlatforms applyGemConfigs;
   inherit (import ../test-helpers.nix) assertEq assertThrows;
 
   # ── test fixtures ────────────────────────────────────────────
@@ -150,6 +150,92 @@ let
     && assertEq "resolvePlatforms: nokogiri resolved to arm64" result.nokogiri.platform "arm64-darwin"
     && assertEq "resolvePlatforms: ffi resolved to linux" result.ffi.platform "aarch64-linux-gnu";
 
+  # ── applyGemConfigs ───────────────────────────────────────────
+
+  test_applyGemConfigs_matching =
+    let
+      myConfig = {
+        rake = attrs: { buildFlags = [ "--verbose" ]; };
+      };
+      result = applyGemConfigs myConfig gemRake;
+    in
+    assertEq "applyGemConfigs: matching gem gets config merged"
+      result.buildFlags
+      [ "--verbose" ];
+
+  test_applyGemConfigs_no_match =
+    let
+      myConfig = {
+        nokogiri = attrs: { buildFlags = [ "--verbose" ]; };
+      };
+      result = applyGemConfigs myConfig gemRake;
+    in
+    # rake is not in myConfig, should be returned unchanged
+    assertEq "applyGemConfigs: non-matching gem unchanged"
+      (result ? buildFlags)
+      false;
+
+  test_applyGemConfigs_config_receives_attrs =
+    let
+      # config function that uses the gem's own version
+      myConfig = {
+        rake = attrs: { description = "rake version ${attrs.version}"; };
+      };
+      result = applyGemConfigs myConfig gemRake;
+    in
+    assertEq "applyGemConfigs: config function receives gem attrs"
+      result.description
+      "rake version 1.0.0";
+
+  test_applyGemConfigs_empty_config =
+    let
+      result = applyGemConfigs { } gemRake;
+    in
+    assertEq "applyGemConfigs: empty config leaves gem unchanged"
+      result.gemName
+      "rake";
+
+  # ── critique #9: reproduce the shadowing bug pattern ─────────
+  #
+  # In the old default.nix, the user-supplied gemConfig argument was shadowed
+  # by a local `let` binding. This test reproduces that pattern to prove the
+  # bug is real, then verifies our extracted applyGemConfigs avoids it.
+
+  test_gemConfig_shadowing_bug =
+    let
+      # Simulate what old default.nix did:
+      # 1. User passes userConfig as the "gemConfig" argument
+      # 2. A local let binding redefines gemConfig, shadowing the argument
+      # 3. applyGemConfigs closes over the local, not the user's
+      userConfig = {
+        rake = attrs: { userSupplied = true; };
+      };
+      localConfig = {
+        nokogiri = attrs: { localOnly = true; };
+      };
+
+      # OLD PATTERN (buggy): applyGemConfigs closes over localConfig,
+      # ignoring userConfig entirely
+      buggyApply = attrs:
+        if localConfig ? ${attrs.gemName} then
+          attrs // localConfig.${attrs.gemName} attrs
+        else
+          attrs;
+
+      buggyResult = buggyApply gemRake;
+    in
+    # The user wanted rake to get { userSupplied = true; } but the local config
+    # doesn't have rake, so it passes through unchanged and the user's config is
+    # silently lost.
+    assertEq "gemConfig shadowing: buggy pattern loses user config"
+      (buggyResult ? userSupplied)
+      false
+    # Now verify the correct pattern: applyGemConfigs takes config as a
+    # parameter, so we can pass the user's config
+    && assertEq "gemConfig shadowing: correct pattern applies user config"
+      (applyGemConfigs userConfig gemRake).userSupplied
+      true;
+
   # ── all tests ────────────────────────────────────────────────
 
   allTests =
@@ -172,7 +258,14 @@ let
     && test_resolve_prefers_specific
     && test_resolve_ruby_only
     && test_resolve_multiple_specific
-    && test_resolve_mixed_gems;
+    && test_resolve_mixed_gems
+    # applyGemConfigs
+    && test_applyGemConfigs_matching
+    && test_applyGemConfigs_no_match
+    && test_applyGemConfigs_config_receives_attrs
+    && test_applyGemConfigs_empty_config
+    # critique #9: shadowing
+    && test_gemConfig_shadowing_bug;
 
 in
 allTests
