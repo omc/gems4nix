@@ -24,7 +24,7 @@
   name,
   gemfile,
   gemfileLock,
-  platforms ? [ "ruby" ],
+  platforms ? null, # null = auto-detect from stdenv.hostPlatform.system
   groups ? [
     "default"
     "development"
@@ -43,10 +43,15 @@ let
 
   # ── filtering (pure logic lives in filter-helpers.nix) ───────
   filterHelpers = import ./filter-helpers.nix { inherit lib; };
-  inherit (filterHelpers) filterGroup filterPlatform resolvePlatforms applyGemConfigs;
+  inherit (filterHelpers) filterGroup filterPlatform resolvePlatforms applyGemConfigs platformsForSystem;
+
+  # Resolve platforms: user-supplied list, or auto-detect from stdenv
+  resolvedPlatforms =
+    if platforms != null then platforms
+    else platformsForSystem stdenv.hostPlatform.system;
 
   gemsForGroups = builtins.filter (filterGroup groups) gemMetadata;
-  gemsForGroupsAndPlatforms = builtins.filter (filterPlatform platforms) gemsForGroups;
+  gemsForGroupsAndPlatforms = builtins.filter (filterPlatform resolvedPlatforms) gemsForGroups;
 
   # Merge user-supplied gemConfig with our local overrides (e.g., nokogiri).
   # The user's config takes precedence: if they supply a nokogiri entry, it
@@ -99,6 +104,6 @@ let
   finalGems = lib.attrsets.mapAttrsToList (gemName: gem: gem) platformResolvedGemsByName;
 in
 buildEnv {
-  name = "${name}-${lib.strings.concatStringsSep "-" groups}-${lib.strings.concatStringsSep "-" platforms}";
+  name = "${name}-${lib.strings.concatStringsSep "-" groups}-${lib.strings.concatStringsSep "-" resolvedPlatforms}";
   paths = finalGems;
 }

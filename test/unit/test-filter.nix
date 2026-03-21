@@ -9,7 +9,7 @@ let
   }) { };
   lib = nixpkgs.lib;
   filterHelpers = import ../../lib/gemfile-env/filter-helpers.nix { inherit lib; };
-  inherit (filterHelpers) filterGroup filterPlatform resolvePlatforms applyGemConfigs;
+  inherit (filterHelpers) filterGroup filterPlatform resolvePlatforms applyGemConfigs platformsForSystem;
   inherit (import ../test-helpers.nix) assertEq assertThrows;
 
   # ── test fixtures ────────────────────────────────────────────
@@ -236,6 +236,90 @@ let
       (applyGemConfigs userConfig gemRake).userSupplied
       true;
 
+  # ── platformsForSystem (#19) ─────────────────────────────────
+  #
+  # Maps nixpkgs system strings to the Ruby platform strings that should be
+  # accepted from a Gemfile.lock. Always includes "ruby" (pure-Ruby gems).
+
+  test_platformsForSystem_aarch64_darwin =
+    let result = platformsForSystem "aarch64-darwin";
+    in
+    assertEq "platformsForSystem: aarch64-darwin includes ruby"
+      (builtins.elem "ruby" result)
+      true
+    && assertEq "platformsForSystem: aarch64-darwin includes arm64-darwin"
+      (builtins.elem "arm64-darwin" result)
+      true
+    && assertEq "platformsForSystem: aarch64-darwin includes universal-darwin"
+      (builtins.elem "universal-darwin" result)
+      true;
+
+  test_platformsForSystem_x86_64_darwin =
+    let result = platformsForSystem "x86_64-darwin";
+    in
+    assertEq "platformsForSystem: x86_64-darwin includes ruby"
+      (builtins.elem "ruby" result)
+      true
+    && assertEq "platformsForSystem: x86_64-darwin includes x86_64-darwin"
+      (builtins.elem "x86_64-darwin" result)
+      true
+    && assertEq "platformsForSystem: x86_64-darwin includes universal-darwin"
+      (builtins.elem "universal-darwin" result)
+      true
+    && assertEq "platformsForSystem: x86_64-darwin does NOT include arm64-darwin"
+      (builtins.elem "arm64-darwin" result)
+      false;
+
+  test_platformsForSystem_aarch64_linux =
+    let result = platformsForSystem "aarch64-linux";
+    in
+    assertEq "platformsForSystem: aarch64-linux includes ruby"
+      (builtins.elem "ruby" result)
+      true
+    && assertEq "platformsForSystem: aarch64-linux includes aarch64-linux"
+      (builtins.elem "aarch64-linux" result)
+      true
+    && assertEq "platformsForSystem: aarch64-linux includes aarch64-linux-gnu"
+      (builtins.elem "aarch64-linux-gnu" result)
+      true
+    && assertEq "platformsForSystem: aarch64-linux includes aarch64-linux-musl"
+      (builtins.elem "aarch64-linux-musl" result)
+      true;
+
+  test_platformsForSystem_x86_64_linux =
+    let result = platformsForSystem "x86_64-linux";
+    in
+    assertEq "platformsForSystem: x86_64-linux includes ruby"
+      (builtins.elem "ruby" result)
+      true
+    && assertEq "platformsForSystem: x86_64-linux includes x86_64-linux"
+      (builtins.elem "x86_64-linux" result)
+      true
+    && assertEq "platformsForSystem: x86_64-linux includes x86_64-linux-gnu"
+      (builtins.elem "x86_64-linux-gnu" result)
+      true
+    && assertEq "platformsForSystem: x86_64-linux includes x86_64-linux-musl"
+      (builtins.elem "x86_64-linux-musl" result)
+      true;
+
+  test_platformsForSystem_unknown_throws =
+    assertThrows "platformsForSystem: unknown system throws"
+      (platformsForSystem "riscv64-linux");
+
+  # Verify the mapping integrates with filterPlatform end-to-end
+  test_platformsForSystem_filter_integration =
+    let
+      platforms = platformsForSystem "aarch64-darwin";
+      # arm64-darwin gem should pass filterPlatform with aarch64-darwin mapping
+      passes = filterPlatform platforms gemNokogiriArm;
+      # x86_64-darwin gem should NOT pass
+      rejects = filterPlatform platforms gemNokogiriX86;
+    in
+    assertEq "platformsForSystem integration: arm64-darwin gem passes on aarch64-darwin"
+      passes true
+    && assertEq "platformsForSystem integration: x86_64-darwin gem rejected on aarch64-darwin"
+      rejects false;
+
   # ── all tests ────────────────────────────────────────────────
 
   allTests =
@@ -265,7 +349,14 @@ let
     && test_applyGemConfigs_config_receives_attrs
     && test_applyGemConfigs_empty_config
     # critique #9: shadowing
-    && test_gemConfig_shadowing_bug;
+    && test_gemConfig_shadowing_bug
+    # critique #19: platformsForSystem
+    && test_platformsForSystem_aarch64_darwin
+    && test_platformsForSystem_x86_64_darwin
+    && test_platformsForSystem_aarch64_linux
+    && test_platformsForSystem_x86_64_linux
+    && test_platformsForSystem_unknown_throws
+    && test_platformsForSystem_filter_integration;
 
 in
 allTests

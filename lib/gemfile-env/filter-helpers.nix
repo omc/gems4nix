@@ -23,6 +23,26 @@
     else
       attrs;
 
+  # Map a nixpkgs system string to the Ruby platform strings that should be
+  # accepted from a Gemfile.lock. Always includes "ruby" (pure-Ruby gems).
+  #
+  # The mapping covers the four systems that RubyGems publishes pre-built
+  # native gems for. Musl variants are included for Alpine/NixOS-static.
+  # Unknown systems throw with a clear message so users know to override.
+  platformsForSystem = system:
+    let
+      mapping = {
+        "aarch64-darwin" = [ "ruby" "arm64-darwin" "universal-darwin" ];
+        "x86_64-darwin"  = [ "ruby" "x86_64-darwin" "universal-darwin" ];
+        "aarch64-linux"  = [ "ruby" "aarch64-linux" "aarch64-linux-gnu" "aarch64-linux-musl" ];
+        "x86_64-linux"   = [ "ruby" "x86_64-linux" "x86_64-linux-gnu" "x86_64-linux-musl" ];
+      };
+    in
+    if mapping ? ${system} then
+      mapping.${system}
+    else
+      throw "platformsForSystem: unsupported system '${system}'. Pass an explicit `platforms` list or extend platformsForSystem.";
+
   # Given a list of gems (possibly containing duplicates for different
   # platforms), resolve to one gem per name. Prefer platform-specific gems
   # over pure-ruby ones.
