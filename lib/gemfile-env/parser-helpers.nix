@@ -153,9 +153,15 @@ let
 
       # GEM sections (may have more than one remote)
       gemSectionIndices = findIndices (l: l == "GEM") lines;
+      _ =
+        if gemSectionIndices == [ ] then
+          throw "cannot find GEM section in Gemfile.lock - is this a valid Bundler lockfile?"
+        else
+          true;
       gemSectionLines = lib.lists.map (i: takeLines i lines) gemSectionIndices;
       gemSections = lib.lists.map parseGemSection gemSectionLines;
     in
+    assert _ == true;
     { inherit checksumSection gemSections; };
 
   # Invert gem sections into a flat { gemName = remote; ... } lookup.

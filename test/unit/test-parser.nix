@@ -210,6 +210,40 @@ let
       (builtins.length result.gemSections)
       2;
 
+  # ── parseLockfileContent: missing GEM section (critique #5) ──
+
+  test_parseLockfileContent_missing_gem_section = assertThrows
+    "parseLockfileContent: missing GEM section throws"
+    (parseLockfileContent ''
+      CHECKSUMS
+        rake (13.0.6) sha256=aaaa
+
+      BUNDLED WITH
+         2.5.22
+    '');
+
+  # A lockfile with CHECKSUMS but a completely empty GEM section (no specs)
+  test_parseLockfileContent_empty_gem_specs =
+    let
+      result = parseLockfileContent ''
+        GEM
+          remote: https://rubygems.org/
+          specs:
+
+        CHECKSUMS
+
+        BUNDLED WITH
+           2.5.22
+      '';
+    in
+    # empty CHECKSUMS = no gems parsed, and an empty GEM section is valid
+    assertEq "parseLockfileContent: empty gem specs returns empty checksumSection"
+      (builtins.length result.checksumSection)
+      0
+    && assertEq "parseLockfileContent: empty gem specs still has one gemSection"
+      (builtins.length result.gemSections)
+      1;
+
   # ── buildGemRemotes ──────────────────────────────────────────
 
   test_buildGemRemotes =
@@ -304,6 +338,9 @@ let
     && test_parseLockfileContent
     && test_parseLockfileContent_missing_checksums
     && test_parseLockfileContent_multi_remote
+    # parseLockfileContent: missing GEM section
+    && test_parseLockfileContent_missing_gem_section
+    && test_parseLockfileContent_empty_gem_specs
     # buildGemRemotes
     && test_buildGemRemotes
     && test_buildGemRemotes_first_writer_wins
