@@ -24,12 +24,12 @@
    section iterates ~1000 lines. This isn't a correctness bug but is worth
    noting for very large lockfiles.
 
-4. **`gemRemotes` last-writer-wins for duplicate gem names.**
+4. **`gemRemotes` first-writer-wins for duplicate gem names.**
    `builtins.listToAttrs` on a flattened list means if the same gem name
    appears in multiple GEM sections (e.g., `faraday` from both rubygems.org
-   and a private registry), only the last section's remote survives. The TODO
-   on line 157 acknowledges this, but the current behavior is silently wrong
-   rather than loudly wrong.
+   and a private registry), only the first section's remote survives. The TODO
+   in `parser-helpers.nix` acknowledges this, but the current behavior is
+   silently arbitrary rather than loudly wrong.
 
 5. **Missing CHECKSUMS is the only validated section.**
    If the `GEM` section is missing or malformed, the parser will produce

@@ -2,7 +2,8 @@
 # Extracted for testability: no runCommand, no IO.
 { lib }:
 
-{
+let
+
   # when a list has many matching elements, return them all
   findIndices =
     pred: list:
@@ -132,4 +133,78 @@
     {
       inherit remote gems;
     };
+
+  # ── lockfile-level assembly (pure, no IO) ────────────────────
+
+  # Parse the full content of a Gemfile.lock into its checksum and GEM sections.
+  # Returns: { checksumSection, gemSections }
+  parseLockfileContent = content:
+    let
+      lines = lib.splitString "\n" content;
+
+      # CHECKSUMS
+      checksumSectionIndex = lib.lists.findFirstIndex (line: line == "CHECKSUMS") null lines;
+      checksumSectionLines =
+        if checksumSectionIndex == null then
+          throw "cannot find CHECKSUMS in Gemfile.lock - run 'bundle lock --add-checksums'"
+        else
+          takeLines checksumSectionIndex lines;
+      checksumSection = lib.lists.map parseChecksumLine checksumSectionLines;
+
+      # GEM sections (may have more than one remote)
+      gemSectionIndices = findIndices (l: l == "GEM") lines;
+      gemSectionLines = lib.lists.map (i: takeLines i lines) gemSectionIndices;
+      gemSections = lib.lists.map parseGemSection gemSectionLines;
+    in
+    { inherit checksumSection gemSections; };
+
+  # Invert gem sections into a flat { gemName = remote; ... } lookup.
+  # Last-writer-wins when a gem appears in multiple sections.
+  # TODO: group by gem name for multiple remotes; e.g., depot depends on faraday
+  # which shows up in both but we prefer rubygems.org.
+  buildGemRemotes = gemSections:
+    builtins.listToAttrs (
+      lib.lists.flatten (
+        lib.lists.map (
+          section:
+          lib.lists.map (gem: {
+            name = gem;
+            value = section.remote;
+          }) section.gems
+        ) gemSections
+      )
+    );
+
+  # Merge parsed checksums with group info and remote URLs into the final
+  # gem metadata list that the rest of the pipeline expects.
+  mergeGemMetadata = { checksumSection, gemRemotes, gemGroups }:
+    lib.lists.map (gemAttrs: {
+      inherit (gemAttrs)
+        gemName
+        platform
+        version
+        ;
+
+      # Build-time deps (e.g., mini_portile2) may appear in the lock but not
+      # in the group parser output. Default to empty groups so they get
+      # filtered out rather than crashing.
+      groups = gemGroups.${gemAttrs.gemName} or [ ];
+
+      source = gemAttrs.source // {
+        remotes = [ gemRemotes.${gemAttrs.gemName} ];
+        type = "gem"; # todo: git, path sources
+      };
+    }) checksumSection;
+
+in
+{
+  inherit
+    findIndices
+    takeLines
+    parseChecksumLine
+    parseGemSection
+    parseLockfileContent
+    buildGemRemotes
+    mergeGemMetadata
+    ;
 }

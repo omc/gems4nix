@@ -19,31 +19,35 @@ Tests follow a **red-green-refactor** loop:
 ## Test Structure
 
 ```
+lib/gemfile-env/
+├── default.nix                        # orchestrator: imports helpers, builds gems
+├── parse-gemfile-and-lockfile.nix     # IO shell: readFile, runCommand, delegates to helpers
+├── parser-helpers.nix                 # pure: all parsing (line, section, lockfile assembly)
+├── filter-helpers.nix                 # pure: filterGroup, filterPlatform, resolvePlatforms
+├── gem-groups.rb                      # Ruby script for group extraction
+└── gem-dependencies.rb                # (placeholder)
+
 test/
-├── test.nix                    # existing integration test (full Rails build)
+├── test-helpers.nix                   # shared assertEq, assertThrows
+├── test.nix                           # integration test (full Rails build)
 ├── unit/
-│   └── test-parser.nix         # unit tests for parser functions
-│   └── test-filter.nix         # unit tests for filtering logic
+│   ├── test-parser.nix                # unit tests for parser-helpers.nix
+│   └── test-filter.nix                # unit tests for filter-helpers.nix
 └── rails/
     ├── Gemfile
     ├── Gemfile.lock
     └── gemset.nix
 ```
 
-### Unit tests (`test/unit/test-parser.nix`, `test/unit/test-filter.nix`)
+### Architecture for testability
 
-Pure Nix assertions against individual functions. These import the parser and
-filtering modules, exercise them with crafted inputs, and assert on outputs.
-No network access, no `runCommand`, no Ruby.
+All pure logic lives in `*-helpers.nix` files that take only `{ lib }` as
+input. The production modules (`parse-gemfile-and-lockfile.nix`, `default.nix`)
+import these helpers and add IO / nixpkgs build concerns on top. Tests import
+the helpers directly to avoid needing `callPackage`, `runCommand`, or Ruby.
 
-Because the parser's helper functions (`parseChecksumLine`, `takeLines`,
-`findIndices`, `parseGemSection`) are local `let` bindings, we **re-export
-them via a `testing` attribute** when the module is loaded in test mode. This
-avoids restructuring the production code while still enabling unit tests.
-
-Alternatively: the test file can define its own copies of the pure functions
-under test, extracted from the source. This duplicates code but avoids any
-production changes. We take this approach initially.
+Shared assertion functions (`assertEq`, `assertThrows`) live in
+`test/test-helpers.nix` and are imported by all unit test files.
 
 ### Integration test (`test/test.nix`)
 

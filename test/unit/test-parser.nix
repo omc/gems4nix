@@ -9,28 +9,10 @@ let
   }) { };
   lib = nixpkgs.lib;
   helpers = import ../../lib/gemfile-env/parser-helpers.nix { inherit lib; };
-  inherit (helpers) findIndices takeLines parseChecksumLine parseGemSection;
-
-  # helper: assert with message
-  assertEq = name: actual: expected:
-    if actual == expected then true
-    else throw "FAIL: ${name}\n  expected: ${builtins.toJSON expected}\n  actual:   ${builtins.toJSON actual}";
-
-  # helper: assert that evaluating an expression throws
-  assertThrows = name: expr:
-    let
-      result = builtins.tryEval (builtins.deepSeq expr expr);
-    in
-    if result.success then
-      throw "FAIL: ${name}\n  expected an error but got: ${builtins.toJSON result.value}"
-    else
-      true;
-
-  # helper: assert that evaluating an expression throws, and the error contains a substring
-  # NOTE: builtins.tryEval does not expose the error message, so we can only
-  # check that it throws. To verify the message is helpful, we test it manually
-  # during RED and confirm the fix in GREEN.
-  assertThrowsWithMessage = assertThrows;
+  inherit (helpers)
+    findIndices takeLines parseChecksumLine parseGemSection
+    parseLockfileContent buildGemRemotes mergeGemMetadata;
+  inherit (import ../test-helpers.nix) assertEq assertThrows;
 
   # ── findIndices ──────────────────────────────────────────────
 
@@ -102,15 +84,15 @@ let
 
   # ── parseChecksumLine: malformed input (recommendation #1) ──
 
-  test_parseChecksum_missing_hash = assertThrowsWithMessage
+  test_parseChecksum_missing_hash = assertThrows
     "parseChecksumLine: missing hash should throw a helpful error"
     (parseChecksumLine "  zeitwerk (2.6.18)");
 
-  test_parseChecksum_extra_leading_spaces = assertThrowsWithMessage
+  test_parseChecksum_extra_leading_spaces = assertThrows
     "parseChecksumLine: extra leading spaces should throw a helpful error"
     (parseChecksumLine "    zeitwerk (2.6.18) sha256=abc123");
 
-  test_parseChecksum_empty_line = assertThrowsWithMessage
+  test_parseChecksum_empty_line = assertThrows
     "parseChecksumLine: empty line should throw a helpful error"
     (parseChecksumLine "");
 
@@ -139,10 +121,8 @@ let
     assertEq "parseGemSection: remote without trailing slash" result.remote "https://rubygems.pkg.github.com/omc"
     && assertEq "parseGemSection: gems from private remote" result.gems [ "depot" ];
 
-  test_parseGemSection_deps_ignored =
+  test_parseGemSection_deps_included =
     let
-      # dependency lines are indented further (6 spaces) and appear after the gem line (4 spaces).
-      # parseGemSection extracts all non-empty parts; the gem name is elemAt 0.
       result = parseGemSection [
         "  remote: https://rubygems.org/"
         "  specs:"
@@ -152,31 +132,184 @@ let
         "    zeitwerk (2.7.2)"
       ];
     in
-    # dependency lines are included in the gem list. parseGemSection does not
-    # distinguish indent levels. This documents current behavior.
+    # dependency lines are included; parseGemSection does not distinguish indent levels.
     assertEq "parseGemSection: dependency lines included (current behavior)"
       result.gems
       [ "actioncable" "actionpack" "activesupport" "zeitwerk" ];
 
+  # ── parseLockfileContent ─────────────────────────────────────
+
+  minimalLockfile = ''
+    GEM
+      remote: https://rubygems.org/
+      specs:
+        rake (13.0.6)
+        zeitwerk (2.7.2)
+
+    PLATFORMS
+      ruby
+
+    CHECKSUMS
+      rake (13.0.6) sha256=aaaa
+      zeitwerk (2.7.2) sha256=bbbb
+
+    BUNDLED WITH
+       2.5.22
+  '';
+
+  test_parseLockfileContent =
+    let
+      result = parseLockfileContent minimalLockfile;
+    in
+    assertEq "parseLockfileContent: checksumSection length"
+      (builtins.length result.checksumSection)
+      2
+    && assertEq "parseLockfileContent: first checksum gemName"
+      (builtins.elemAt result.checksumSection 0).gemName
+      "rake"
+    && assertEq "parseLockfileContent: gemSections length"
+      (builtins.length result.gemSections)
+      1
+    && assertEq "parseLockfileContent: first section remote"
+      (builtins.elemAt result.gemSections 0).remote
+      "https://rubygems.org";
+
+  test_parseLockfileContent_missing_checksums = assertThrows
+    "parseLockfileContent: missing CHECKSUMS throws"
+    (parseLockfileContent ''
+      GEM
+        remote: https://rubygems.org/
+        specs:
+          rake (13.0.6)
+
+      PLATFORMS
+        ruby
+    '');
+
+  multiRemoteLockfile = ''
+    GEM
+      remote: https://rubygems.org/
+      specs:
+        rake (13.0.6)
+
+    GEM
+      remote: https://private.example.com/
+      specs:
+        mygem (1.0.0)
+
+    CHECKSUMS
+      rake (13.0.6) sha256=aaaa
+      mygem (1.0.0) sha256=bbbb
+  '';
+
+  test_parseLockfileContent_multi_remote =
+    let
+      result = parseLockfileContent multiRemoteLockfile;
+    in
+    assertEq "parseLockfileContent: multi-remote gemSections count"
+      (builtins.length result.gemSections)
+      2;
+
+  # ── buildGemRemotes ──────────────────────────────────────────
+
+  test_buildGemRemotes =
+    let
+      sections = [
+        { remote = "https://rubygems.org"; gems = [ "rake" "zeitwerk" ]; }
+        { remote = "https://private.example.com"; gems = [ "mygem" ]; }
+      ];
+      result = buildGemRemotes sections;
+    in
+    assertEq "buildGemRemotes: rake" result.rake "https://rubygems.org"
+    && assertEq "buildGemRemotes: zeitwerk" result.zeitwerk "https://rubygems.org"
+    && assertEq "buildGemRemotes: mygem" result.mygem "https://private.example.com";
+
+  test_buildGemRemotes_first_writer_wins =
+    let
+      sections = [
+        { remote = "https://rubygems.org"; gems = [ "faraday" ]; }
+        { remote = "https://private.example.com"; gems = [ "faraday" ]; }
+      ];
+      result = buildGemRemotes sections;
+    in
+    # builtins.listToAttrs keeps the first occurrence when names collide
+    assertEq "buildGemRemotes: duplicate gem uses first remote"
+      result.faraday
+      "https://rubygems.org";
+
+  # ── mergeGemMetadata ─────────────────────────────────────────
+
+  test_mergeGemMetadata =
+    let
+      result = mergeGemMetadata {
+        checksumSection = [
+          { gemName = "rake"; version = "13.0.6"; platform = "ruby"; source = { sha256 = "aaaa"; }; }
+          { gemName = "ffi"; version = "1.17.2"; platform = "arm64-darwin"; source = { sha256 = "bbbb"; }; }
+        ];
+        gemRemotes = {
+          rake = "https://rubygems.org";
+          ffi = "https://rubygems.org";
+        };
+        gemGroups = {
+          rake = [ "default" ];
+          ffi = [ "default" "development" ];
+        };
+      };
+      rake = builtins.elemAt result 0;
+      ffi = builtins.elemAt result 1;
+    in
+    assertEq "mergeGemMetadata: rake groups" rake.groups [ "default" ]
+    && assertEq "mergeGemMetadata: rake remote" rake.source.remotes [ "https://rubygems.org" ]
+    && assertEq "mergeGemMetadata: rake type" rake.source.type "gem"
+    && assertEq "mergeGemMetadata: ffi platform" ffi.platform "arm64-darwin"
+    && assertEq "mergeGemMetadata: ffi groups" ffi.groups [ "default" "development" ];
+
+  test_mergeGemMetadata_missing_group_defaults_empty =
+    let
+      result = mergeGemMetadata {
+        checksumSection = [
+          { gemName = "mini_portile2"; version = "2.8.0"; platform = "ruby"; source = { sha256 = "cccc"; }; }
+        ];
+        gemRemotes = { mini_portile2 = "https://rubygems.org"; };
+        gemGroups = { }; # mini_portile2 not in groups (build-time dep)
+      };
+      gem = builtins.elemAt result 0;
+    in
+    assertEq "mergeGemMetadata: missing group defaults to []" gem.groups [ ];
+
   # ── all tests ────────────────────────────────────────────────
 
   allTests =
+    # findIndices
     test_findIndices_multiple
     && test_findIndices_none
     && test_findIndices_single
+    # takeLines
     && test_takeLines_basic
     && test_takeLines_no_blank
     && test_takeLines_immediate_blank
     && test_takeLines_offset
+    # parseChecksumLine
     && test_parseChecksum_simple
     && test_parseChecksum_platform
     && test_parseChecksum_multi_segment_platform
     && test_parseChecksum_missing_hash
     && test_parseChecksum_extra_leading_spaces
     && test_parseChecksum_empty_line
+    # parseGemSection
     && test_parseGemSection_basic
     && test_parseGemSection_no_trailing_slash
-    && test_parseGemSection_deps_ignored;
+    && test_parseGemSection_deps_included
+    # parseLockfileContent
+    && test_parseLockfileContent
+    && test_parseLockfileContent_missing_checksums
+    && test_parseLockfileContent_multi_remote
+    # buildGemRemotes
+    && test_buildGemRemotes
+    && test_buildGemRemotes_first_writer_wins
+    # mergeGemMetadata
+    && test_mergeGemMetadata
+    && test_mergeGemMetadata_missing_group_defaults_empty;
 
 in
 allTests

@@ -38,12 +38,13 @@
 }:
 let
 
-  # TODO update output of parser to better suit buildRubyGem
+  # ── parsing ──────────────────────────────────────────────────
   parseGemfileAndLockfile = callPackage ./parse-gemfile-and-lockfile.nix { };
   gemMetadata = parseGemfileAndLockfile { inherit gemfile gemfileLock; };
 
-  filterGroup = groups: gem: builtins.length (lib.lists.intersectLists groups gem.groups) > 0;
-  filterPlatform = groups: gem: lib.lists.any (p: p == gem.platform) platforms;
+  # ── filtering (pure logic lives in filter-helpers.nix) ───────
+  filterHelpers = import ./filter-helpers.nix { inherit lib; };
+  inherit (filterHelpers) filterGroup filterPlatform resolvePlatforms;
 
   gemsForGroups = builtins.filter (filterGroup groups) gemMetadata;
   gemsForGroupsAndPlatforms = builtins.filter (filterPlatform platforms) gemsForGroups;
@@ -99,23 +100,8 @@ let
     buildRubyGem attrs
   ) gemsForGroupsAndPlatforms;
 
-  # we may have multiple gems with the same name, e.g., for different platforms
-  gemsByName = builtins.groupBy (g: g.gemName) allGems;
-
-  # resolve gems based on a preferred platform
-  platformResolvedGemsByName = builtins.mapAttrs (
-    gemName: gems:
-    let
-      otherPlatformGems = builtins.filter (g: g.platform != "ruby") gems;
-      rubyPlatformGems = builtins.filter (g: g.platform == "ruby") gems;
-    in
-    # TODO: noisy warning if we have more than one in either branch here
-    if otherPlatformGems != [ ] then
-      builtins.elemAt otherPlatformGems 0
-    else
-      builtins.elemAt rubyPlatformGems 0
-  ) gemsByName;
-
+  # resolve platform duplicates: prefer platform-specific over pure ruby
+  platformResolvedGemsByName = resolvePlatforms allGems;
   finalGems = lib.attrsets.mapAttrsToList (gemName: gem: gem) platformResolvedGemsByName;
 in
 buildEnv {
