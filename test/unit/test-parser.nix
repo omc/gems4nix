@@ -84,17 +84,21 @@ let
 
   # ── parseChecksumLine: malformed input (recommendation #1) ──
 
-  test_parseChecksum_missing_hash = assertThrows
-    "parseChecksumLine: missing hash should throw a helpful error"
-    (parseChecksumLine "  zeitwerk (2.6.18)");
+  # Git/path gems appear in CHECKSUMS without a hash; parseChecksumLine
+  # returns null for these so the caller can filter them out.
+  test_parseChecksum_missing_hash_returns_null = assertEq
+    "parseChecksumLine: missing hash returns null (git/path gem)"
+    (parseChecksumLine "  errgonomic (0.5.1)")
+    null;
 
   test_parseChecksum_extra_leading_spaces = assertThrows
     "parseChecksumLine: extra leading spaces should throw a helpful error"
     (parseChecksumLine "    zeitwerk (2.6.18) sha256=abc123");
 
-  test_parseChecksum_empty_line = assertThrows
-    "parseChecksumLine: empty line should throw a helpful error"
-    (parseChecksumLine "");
+  test_parseChecksum_empty_line_returns_null = assertEq
+    "parseChecksumLine: empty line returns null"
+    (parseChecksumLine "")
+    null;
 
   # ── parseGemSection ──────────────────────────────────────────
 
@@ -244,6 +248,44 @@ let
       (builtins.length result.gemSections)
       1;
 
+  # ── parseLockfileContent: git/path gems skipped ─────────────
+
+  gitPathLockfile = ''
+    GIT
+      remote: https://github.com/omc/errgonomic.git
+      revision: abc123
+      branch: main
+      specs:
+        errgonomic (0.5.1)
+
+    PATH
+      remote: vendor/hello_gem
+      specs:
+        hello_gem (0.1.0)
+
+    GEM
+      remote: https://rubygems.org/
+      specs:
+        rake (13.0.6)
+
+    CHECKSUMS
+      errgonomic (0.5.1)
+      hello_gem (0.1.0)
+      rake (13.0.6) sha256=aaaa
+  '';
+
+  test_parseLockfileContent_skips_hashless =
+    let
+      result = parseLockfileContent gitPathLockfile;
+    in
+    # Only rake (with a hash) survives; errgonomic and hello_gem are filtered out
+    assertEq "parseLockfileContent: git/path gems filtered from checksumSection"
+      (builtins.length result.checksumSection)
+      1
+    && assertEq "parseLockfileContent: surviving gem is rake"
+      (builtins.elemAt result.checksumSection 0).gemName
+      "rake";
+
   # ── buildGemRemotes ──────────────────────────────────────────
 
   test_buildGemRemotes =
@@ -327,9 +369,9 @@ let
     && test_parseChecksum_simple
     && test_parseChecksum_platform
     && test_parseChecksum_multi_segment_platform
-    && test_parseChecksum_missing_hash
+    && test_parseChecksum_missing_hash_returns_null
     && test_parseChecksum_extra_leading_spaces
-    && test_parseChecksum_empty_line
+    && test_parseChecksum_empty_line_returns_null
     # parseGemSection
     && test_parseGemSection_basic
     && test_parseGemSection_no_trailing_slash
@@ -341,6 +383,8 @@ let
     # parseLockfileContent: missing GEM section
     && test_parseLockfileContent_missing_gem_section
     && test_parseLockfileContent_empty_gem_specs
+    # parseLockfileContent: git/path gems
+    && test_parseLockfileContent_skips_hashless
     # buildGemRemotes
     && test_buildGemRemotes
     && test_buildGemRemotes_first_writer_wins

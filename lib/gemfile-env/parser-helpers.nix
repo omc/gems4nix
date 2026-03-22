@@ -58,11 +58,15 @@ let
       parts = lib.splitString " " stripped;
       numParts = builtins.length parts;
 
-      # validate: we expect exactly "NAME (VERSION) HASH=DIGEST"
+      # Git and path source gems appear in CHECKSUMS without a hash:
+      #   errgonomic (0.5.1)
+      #   hello_gem (0.1.0)
+      # Return null for these; the caller filters them out.
+      # GEM-sourced gems always have 3+ parts: NAME (VERSION) sha256=DIGEST
+      isHashless = numParts < 3;
+
       _ =
-        if numParts < 3 then
-          throw "parseChecksumLine: expected 'NAME (VERSION) sha256=DIGEST' but got ${toString numParts} parts in line: ${line}"
-        else if builtins.elemAt parts 0 == "" then
+        if !isHashless && builtins.elemAt parts 0 == "" then
           throw "parseChecksumLine: unexpected leading whitespace in line: ${line}"
         else
           true;
@@ -71,7 +75,7 @@ let
       rawVersion = builtins.elemAt parts 1;
 
       __ =
-        if !(lib.strings.hasPrefix "(" rawVersion) then
+        if !isHashless && !(lib.strings.hasPrefix "(" rawVersion) then
           throw "parseChecksumLine: expected version in parens, e.g. '(1.0.0)', but got '${rawVersion}' in line: ${line}"
         else
           true;
@@ -90,14 +94,16 @@ let
       hashParts = lib.splitString "=" rawHash;
 
       ___ =
-        if builtins.length hashParts < 2 then
+        if !isHashless && builtins.length hashParts < 2 then
           throw "parseChecksumLine: expected 'sha256=DIGEST' but got '${rawHash}' in line: ${line}"
         else
           true;
 
       sha256 = builtins.elemAt hashParts 1;
     in
-    # force validation before returning
+    # Git/path gems without a hash: return null (skipped by caller)
+    if isHashless then null
+    else
     assert _ == true;
     assert __ == true;
     assert ___ == true;
@@ -149,7 +155,8 @@ let
           throw "cannot find CHECKSUMS in Gemfile.lock - run 'bundle lock --add-checksums'"
         else
           takeLines checksumSectionIndex lines;
-      checksumSection = lib.lists.map parseChecksumLine checksumSectionLines;
+      # parseChecksumLine returns null for git/path gems (no hash); filter them out.
+      checksumSection = builtins.filter (x: x != null) (lib.lists.map parseChecksumLine checksumSectionLines);
 
       # GEM sections (may have more than one remote)
       gemSectionIndices = findIndices (l: l == "GEM") lines;
