@@ -4,12 +4,7 @@
 
 ### Parser (`parse-gemfile-and-lockfile.nix`)
 
-1. **`parseChecksumLine` assumes exactly 3 space-delimited parts.**
-   If a checksum line has unexpected formatting (extra spaces, missing hash),
-   `builtins.elemAt parts 2` will throw an unhelpful index error. There's no
-   validation or error message guiding the user.
-
-2. **Version-platform splitting on `-` is naive.**
+1. **Version-platform splitting on `-` is naive.**
    `lib.splitString "-"` on the version token breaks for multi-segment semver
    pre-release versions (e.g., `1.0.0-beta.1`). A gem version like
    `1.0.0-beta1-arm64-darwin` would be misparsed: `version = "1.0.0"`,
@@ -17,85 +12,44 @@
    pre-release hyphens in the lockfile (they use `.pre.`), but the parser
    doesn't assert this; it silently miscategorizes.
 
-3. **`takeLines` processes the entire remaining file after `start`.**
+2. **`takeLines` processes the entire remaining file after `start`.**
    `builtins.foldl'` iterates over every line after the start index, even
    though it stops collecting at the first blank line. For a 1000-line lockfile
    with the CHECKSUMS section at line 745, `takeLines` for the first GEM
    section iterates ~1000 lines. This isn't a correctness bug but is worth
    noting for very large lockfiles.
 
-4. **`gemRemotes` first-writer-wins for duplicate gem names.**
+3. **`gemRemotes` first-writer-wins for duplicate gem names.**
    `builtins.listToAttrs` on a flattened list means if the same gem name
    appears in multiple GEM sections (e.g., `faraday` from both rubygems.org
    and a private registry), only the first section's remote survives. The TODO
    in `parser-helpers.nix` acknowledges this, but the current behavior is
    silently arbitrary rather than loudly wrong.
 
-5. **Missing CHECKSUMS is the only validated section.**
-   If the `GEM` section is missing or malformed, the parser will produce
-   empty results or cryptic errors rather than a clear message.
-
-6. **No support for git or path sources.**
+4. **No support for git or path sources.**
    Gems sourced from git repos or local paths are silently ignored or cause
    errors. This is acknowledged in the README but there's no guard or warning.
 
 ### Filtering and Building (`default.nix`)
 
-7. **`filterPlatform` ignores its first argument.**
-   The function signature is `filterPlatform = groups: gem: ...` but the body
-   references the outer `platforms` binding, not the `groups` parameter. The
-   parameter name is misleading (should be `platforms` or `_`), and the
-   function ignores whatever is passed to it. It works only because it's
-   always called as `filterPlatform platforms`, shadowing correctly by
-   accident.
-
-8. **Platform resolution picks `elemAt 0` arbitrarily.**
-   When multiple platform-specific gems exist (e.g., `arm64-darwin` and
-   `universal-darwin` both match), `builtins.elemAt otherPlatformGems 0`
-   picks the first one in list order, which depends on filter ordering.
-   There is no preference ranking among non-ruby platforms.
-
-   Bundler's own precedence is: exact arch match > compatible match (e.g.,
-   `universal-darwin`) > pure ruby. `resolvePlatforms` should accept the
-   `platformsForSystem` list (which is ordered by preference) and use it
-   to rank candidates. In practice no gem currently ships both
-   `arm64-darwin` and `universal-darwin` variants, so this is latent, but
-   the behavior should be correct before it matters.
-
-   **Action:** Change `resolvePlatforms` to take a `preferredPlatforms`
-   list (ordered most-specific-first) and pick the first candidate that
-   appears earliest in that list. Add a test with synthetic gems that
-   have both `arm64-darwin` and `universal-darwin` variants to verify the
-   exact-match-wins behavior.
-
-9. **`gemConfig` shadows the function argument.**
-   The `let` block defines a local `gemConfig` that merges
-   `defaultGemConfig` with a custom nokogiri config. But the function
-   argument also accepts `gemConfig ? defaultGemConfig`. The local `let`
-   binding shadows the argument, so user-supplied `gemConfig` is ignored.
-
-10. **Empty group gems fall through filtering.**
-    Gems with `groups = []` (like `mini_portile2`, a build-time dependency)
-    are filtered out by `filterGroup` since their intersection with any
-    requested groups is empty. This is probably correct, but it means
-    build-time dependencies that appear in the lockfile are silently dropped.
-    No warning is emitted.
+5. **Empty group gems fall through filtering.**
+   Gems with `groups = []` (like `mini_portile2`, a build-time dependency)
+   are filtered out by `filterGroup` since their intersection with any
+   requested groups is empty. This is probably correct, but it means
+   build-time dependencies that appear in the lockfile are silently dropped.
+   No warning is emitted.
 
 ### General
 
-11. **Single integration test only.**
-    The test suite is one `nix eval` of a full Rails gemfile. There are no
-    unit tests for individual parser functions or filtering logic.
+6. **No CI or automated test invocation.**
+   Tests are run manually. No flake check, no `nix flake check` integration.
 
-12. **No CI or automated test invocation.**
-    Tests are run manually. No flake check, no `nix flake check` integration.
-
-13. **`gem-groups.rb` group propagation may over-propagate.**
-    The Ruby script iterates all specs and propagates groups through
-    descendants, but it does this for every spec regardless of whether that
-    spec is a top-level dependency. A transitive dep shared by gems in
-    different groups accumulates all groups, which may cause it to appear in
-    groups the user didn't request (though this is arguably correct).
+7. **`gem-groups.rb` group propagation may over-propagate.**
+   The Ruby script iterates all specs and propagates groups through
+   descendants, but it does this for every spec regardless of whether that
+   spec is a top-level dependency. A transitive dep shared by gems in
+   different groups accumulates all groups, which may cause it to appear in
+   groups the user didn't request (though this is arguably correct).
 
 ### Upstream nixpkgs alignment
 
@@ -104,41 +58,41 @@ with pre-distributed native binaries, using only the Gemfile.lock as source of
 truth. The closer we stay to nixpkgs' existing `ruby-modules/` infrastructure,
 the less we maintain and the more we benefit from upstream fixes.
 
-14. **Use `bundled-common/functions.nix` instead of reimplementing helpers.**
-    nixpkgs already has `filterGemset`, `platformMatches`, `groupMatches`,
-    `applyGemConfigs`, and `composeGemAttrs` in
-    `pkgs/development/ruby-modules/bundled-common/functions.nix`. Our
-    `filter-helpers.nix` reimplements all of these. The upstream versions
-    handle edge cases we don't yet (e.g., `platformMatches` checks
-    `ruby.rubyEngine` and `version.majMin`, not raw platform strings;
-    `groupMatches` always includes `"default"`; `filterGemset` recursively
-    expands transitive dependencies via a `converge` fixpoint).
+8. **Use `bundled-common/functions.nix` instead of reimplementing helpers.**
+   nixpkgs already has `filterGemset`, `platformMatches`, `groupMatches`,
+   `applyGemConfigs`, and `composeGemAttrs` in
+   `pkgs/development/ruby-modules/bundled-common/functions.nix`. Our
+   `filter-helpers.nix` reimplements some of these. The upstream versions
+   handle edge cases we don't yet (e.g., `platformMatches` checks
+   `ruby.rubyEngine` and `version.majMin`, not raw platform strings;
+   `groupMatches` always includes `"default"`; `filterGemset` recursively
+   expands transitive dependencies via a `converge` fixpoint).
 
-    **Action:** Import and delegate to `bundled-common/functions.nix` where
-    possible. Where our behavior intentionally diverges (e.g., platform
-    matching by lockfile platform strings rather than Ruby engine), document
-    why and keep our version. The functions that are clearly identical
-    (`applyGemConfigs`, `groupMatches`) should be dropped in favor of
-    upstream.
+   **Action:** Import and delegate to `bundled-common/functions.nix` where
+   possible. Where our behavior intentionally diverges (e.g., platform
+   matching by lockfile platform strings rather than Ruby engine), document
+   why and keep our version. The functions that are clearly identical
+   (`applyGemConfigs`, `groupMatches`) should be dropped in favor of
+   upstream.
 
-15. **Use `composeGemAttrs` to assemble `buildRubyGem` inputs.**
-    We currently pass a flat attrset to `buildRubyGem` after merging
-    checksum data with group info and remotes. Upstream's `composeGemAttrs`
-    does this assembly correctly, including:
-    - Injecting the `ruby` derivation
-    - Setting `gemPath` from resolved transitive dependencies (so native
-      extensions can find headers from dependent gems)
-    - Setting `type` from `source.type`
-    - Passing the `gemName` attribute that `buildRubyGem` expects
+9. **Use `composeGemAttrs` to assemble `buildRubyGem` inputs.**
+   We currently pass a flat attrset to `buildRubyGem` after merging
+   checksum data with group info and remotes. Upstream's `composeGemAttrs`
+   does this assembly correctly, including:
+   - Injecting the `ruby` derivation
+   - Setting `gemPath` from resolved transitive dependencies (so native
+     extensions can find headers from dependent gems)
+   - Setting `type` from `source.type`
+   - Passing the `gemName` attribute that `buildRubyGem` expects
 
-    We skip `gemPath` entirely, which means gems with native extensions
-    that depend on other gems' headers (e.g., `nokogiri` depending on
-    `mini_portile2` at build time) may fail in ways that bundlerEnv doesn't.
+   We skip `gemPath` entirely, which means gems with native extensions
+   that depend on other gems' headers (e.g., `nokogiri` depending on
+   `mini_portile2` at build time) may fail in ways that bundlerEnv doesn't.
 
-    **Action:** Use `composeGemAttrs` or replicate its `gemPath` logic to
-    wire up inter-gem build dependencies.
+   **Action:** Use `composeGemAttrs` or replicate its `gemPath` logic to
+   wire up inter-gem build dependencies.
 
-16. **Produce Bundler-aware binstubs like `bundlerEnv` does.**
+10. **Produce Bundler-aware binstubs like `bundlerEnv` does.**
     Our `buildEnv` creates a flat symlink forest of gems, but doesn't
     generate Bundler-compatible binstubs. Upstream `bundlerEnv` runs
     `gen-bin-stubs.rb` which generates wrappers that call `Bundler.setup()`
@@ -153,7 +107,7 @@ the less we maintain and the more we benefit from upstream fixes.
     `bundlerEnv` does), or provide a `confFiles` derivation with the
     Gemfile/Gemfile.lock pair and delegate to upstream's stubs machinery.
 
-17. **Emit a `gemset.nix`-compatible attrset for interop.**
+11. **Emit a `gemset.nix`-compatible attrset for interop.**
     The parsed gem metadata is close (but not identical) to the
     `gemset.nix` format that `bundlerEnv` and `bundled-common` expect. The
     upstream format is keyed by gem name (not a list), includes a
@@ -169,7 +123,7 @@ the less we maintain and the more we benefit from upstream fixes.
     converts our internal representation to the `gemset.nix` format. This
     also serves as a migration path and compatibility layer.
 
-18. **Transitive dependency expansion is missing.**
+12. **Transitive dependency expansion is missing.**
     `bundled-common/functions.nix` has a `converge` fixpoint that expands
     group-filtered gems to include their transitive dependencies (even if
     those deps aren't directly in the requested groups). We don't do this.
@@ -191,27 +145,7 @@ the less we maintain and the more we benefit from upstream fixes.
     group assignment. This also lets us drop the Ruby `runCommand` for
     group extraction if we parse DEPENDENCIES from the lockfile directly.
 
-19. **Platform matching should use nixpkgs' system-to-Ruby-platform mapping.**
-    Users currently pass raw Ruby platform strings (`"arm64-darwin"`,
-    `"aarch64-linux-gnu"`) and must maintain their own mapping from
-    `pkgs.system`. Upstream's `platformMatches` uses `ruby.rubyEngine` and
-    version, which is a different axis (MRI vs JRuby) but at least
-    automatic.
-
-    For pre-built native gems, the correct mapping is:
-    ```
-    aarch64-darwin → arm64-darwin, universal-darwin
-    x86_64-darwin  → x86_64-darwin, universal-darwin
-    aarch64-linux  → aarch64-linux, aarch64-linux-gnu
-    x86_64-linux   → x86_64-linux, x86_64-linux-gnu
-    ```
-
-    **Action:** Provide a `platformsForSystem` helper (or default) that
-    maps `pkgs.system` (or `stdenv.hostPlatform`) to the correct set of
-    Ruby platform strings. Always include `"ruby"`. Users can still
-    override, but the default should just work.
-
-20. **`buildRubyGem` can handle git and path sources natively.**
+13. **`buildRubyGem` can handle git and path sources natively.**
     `buildRubyGem` already supports `type = "git"` (via
     `nix-bundle-install.rb`, which monkey-patches Bundler to install from a
     git checkout) and path sources (via `pathDerivation` in
@@ -233,7 +167,7 @@ the less we maintain and the more we benefit from upstream fixes.
     For path sources, set `source.type = "path"`, `source.path`.
     `buildRubyGem` handles the rest.
 
-21. **The dependency graph is in the lockfile; `gem-groups.rb` is redundant.**
+14. **The dependency graph is in the lockfile; `gem-groups.rb` is redundant.**
     The `specs:` subsection of each `GEM` block lists every gem's direct
     dependencies. The `DEPENDENCIES` section lists top-level gems and their
     groups. Between these two sections, the entire dependency graph and
