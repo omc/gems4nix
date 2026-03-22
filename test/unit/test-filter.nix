@@ -200,6 +200,68 @@ let
       result.gemName
       "rake";
 
+  # ── pipeline: resolve platforms before applying gemConfig ─────
+  #
+  # defaultGemConfig entries (e.g., grpc) contain build/patch instructions
+  # for compiling from source (the ruby variant). The correct pipeline is:
+  #   filter → resolvePlatforms → applyGemConfigs
+  # so that gemConfig is only applied to the winning variant.
+  #
+  # When a precompiled variant wins (e.g., arm64-darwin), it should NOT
+  # receive source-compilation config. When only the ruby variant exists,
+  # it should still receive the config.
+
+  # Simulate the grpc defaultGemConfig entry
+  grpcConfig = {
+    grpc = attrs: {
+      postPatch = "substituteInPlace Makefile --replace foo bar";
+      buildFlags = [ "--with-system-certs" ];
+    };
+  };
+
+  # simulates the fixed pipeline: resolve platforms first, then apply gemConfig
+  # only to ruby variants (precompiled gems skip it).
+  fixedPipeline = { gems, gemConfig, requestedGroups ? [ "default" ], system ? "aarch64-darwin" }:
+    let
+      platforms = platformsForSystem system;
+      afterGroup = builtins.filter (filterGroup requestedGroups) gems;
+      afterPlatform = builtins.filter (filterPlatform platforms) afterGroup;
+      resolved = resolvePlatforms platforms afterPlatform;
+    in
+    builtins.mapAttrs (
+      name: gem:
+        if gem.platform == "ruby"
+        then applyGemConfigs gemConfig gem
+        else gem
+    ) resolved;
+
+  # Negative: precompiled variant wins → gemConfig NOT applied
+  test_pipeline_precompiled_skips_gemConfig =
+    let
+      gems = [
+        (mkGem { gemName = "grpc"; platform = "arm64-darwin"; groups = [ "default" ]; })
+        (mkGem { gemName = "grpc"; platform = "ruby"; groups = [ "default" ]; })
+      ];
+      result = fixedPipeline { inherit gems; gemConfig = grpcConfig; };
+    in
+    assertEq "pipeline: precompiled grpc wins on aarch64-darwin"
+      result.grpc.platform "arm64-darwin"
+    && assertEq "pipeline: precompiled grpc does NOT get postPatch"
+      (result.grpc ? postPatch) false;
+
+  # Positive: ruby-only variant wins → gemConfig IS applied
+  test_pipeline_ruby_only_gets_gemConfig =
+    let
+      gems = [
+        (mkGem { gemName = "grpc"; platform = "ruby"; groups = [ "default" ]; })
+      ];
+      result = fixedPipeline { inherit gems; gemConfig = grpcConfig; };
+    in
+    assertEq "pipeline: ruby grpc wins when only variant"
+      result.grpc.platform "ruby"
+    && assertEq "pipeline: ruby grpc gets postPatch"
+      (result.grpc ? postPatch) true;
+
   # ── critique #9: reproduce the shadowing bug pattern ─────────
   #
   # In the old default.nix, the user-supplied gemConfig argument was shadowed
@@ -367,6 +429,38 @@ let
       result.nokogiri.platform
       "x86_64-darwin";
 
+  # ── regression: ruby-only nokogiri drops mini_portile2 ───────
+  #
+  # When a lockfile has only the `ruby` variant of nokogiri (no precompiled
+  # platform gems), platform resolution selects it. The ruby variant needs
+  # mini_portile2 to compile, but mini_portile2 gets groups=[] (transitive
+  # build dep not in any Gemfile group) and filterGroup drops it.
+  # This causes: "Could not find 'mini_portile2' (~> 2.8.2)"
+  #
+  # This test documents the bug. When fixed, it should pass.
+
+  test_ruby_only_nokogiri_keeps_build_deps =
+    let
+      # Lockfile has only the ruby variant of nokogiri (no arm64-darwin etc.)
+      gems = [
+        (mkGem { gemName = "nokogiri"; platform = "ruby"; groups = [ "default" ]; })
+        (mkGem { gemName = "mini_portile2"; platform = "ruby"; groups = [ ]; })
+        (mkGem { gemName = "racc"; platform = "ruby"; groups = [ "default" ]; })
+      ];
+      requestedGroups = [ "default" ];
+      platforms = platformsForSystem "aarch64-darwin";
+      afterGroup = builtins.filter (filterGroup requestedGroups) gems;
+      afterPlatform = builtins.filter (filterPlatform platforms) afterGroup;
+      resolved = resolvePlatforms platforms afterPlatform;
+      names = builtins.attrNames resolved;
+    in
+    # nokogiri must resolve to ruby (only variant available)
+    assertEq "ruby-only nokogiri: resolves to ruby platform"
+      resolved.nokogiri.platform "ruby"
+    # mini_portile2 must survive filtering, it's needed to build nokogiri
+    && assertEq "ruby-only nokogiri: mini_portile2 included for build"
+      (builtins.elem "mini_portile2" names) true;
+
   # ── all tests ────────────────────────────────────────────────
 
   allTests =
@@ -395,6 +489,9 @@ let
     && test_applyGemConfigs_no_match
     && test_applyGemConfigs_config_receives_attrs
     && test_applyGemConfigs_empty_config
+    # pipeline: resolve platforms before gemConfig
+    && test_pipeline_precompiled_skips_gemConfig
+    && test_pipeline_ruby_only_gets_gemConfig
     # critique #9: shadowing
     && test_gemConfig_shadowing_bug
     # critique #8: platform preference ordering
@@ -407,7 +504,9 @@ let
     && test_platformsForSystem_aarch64_linux
     && test_platformsForSystem_x86_64_linux
     && test_platformsForSystem_unknown_throws
-    && test_platformsForSystem_filter_integration;
+    && test_platformsForSystem_filter_integration
+    # regression: ruby-only nokogiri must keep build deps
+    && test_ruby_only_nokogiri_keeps_build_deps;
 
 in
 allTests

@@ -35,12 +35,27 @@
 
 ### Filtering and Building (`default.nix`)
 
-5. **Empty group gems fall through filtering.**
+5. **Empty group gems fall through filtering (confirmed regression).**
    Gems with `groups = []` (like `mini_portile2`, a build-time dependency)
    are filtered out by `filterGroup` since their intersection with any
-   requested groups is empty. This is probably correct, but it means
-   build-time dependencies that appear in the lockfile are silently dropped.
-   No warning is emitted.
+   requested groups is empty. This causes a real build failure when a
+   lockfile contains only the `ruby` platform variant of nokogiri (no
+   precompiled platform gems like `arm64-darwin`): the ruby variant requires
+   `mini_portile2` to compile, but it's been dropped.
+
+   Error: `Could not find 'mini_portile2' (~> 2.8.2)` during nokogiri build.
+
+   **Regression test:** `test/unit/test-filter.nix` →
+   `test_ruby_only_nokogiri_keeps_build_deps` (currently fails, documenting
+   the bug).
+
+   **Fix options:**
+   - Parse the dependency graph from the lockfile `specs:` section (see #12,
+     #14) and include transitive deps of resolved gems regardless of group.
+   - Have `gem-groups.rb` propagate groups to build-time deps like
+     `mini_portile2`.
+   - Add a post-resolution step that pulls in dependencies of ruby-variant
+     gems using `composeGemAttrs` / `gemPath` (see #9).
 
 ### General
 
@@ -97,6 +112,29 @@ the less we maintain and the more we benefit from upstream fixes.
 
    **Action:** Use `composeGemAttrs` or replicate its `gemPath` logic to
    wire up inter-gem build dependencies.
+
+   **Confirmed regression (grpc):** `defaultGemConfig` has a `grpc` entry
+   with `postPatch` / `substituteInPlace Makefile` intended for source
+   compilation. Our `applyGemConfigs` matches by gem name only, so this
+   config is blindly applied to the precompiled `grpc-1.78.1-arm64-darwin`
+   variant, which has no `Makefile`. Error:
+   `substitute(): ERROR: file 'Makefile' does not exist`.
+
+   The config function already receives `attrs` (which includes `platform`),
+   so it *could* guard on `attrs.platform == "ruby"`. But neither
+   `applyGemConfigs` nor any `defaultGemConfig` entries do this today.
+
+   **Fix options:**
+   - Make `applyGemConfigs` skip `defaultGemConfig` entries for non-ruby
+     platform gems (precompiled gems shouldn't need source build overrides).
+   - Have the config functions themselves check `attrs.platform` and return
+     `{}` for precompiled variants.
+   - Reorder the pipeline: resolve platforms *before* applying gem configs,
+     so only the winning variant gets configured.
+
+   **Regression test:** `test/unit/test-filter.nix` →
+   `test_applyGemConfigs_should_respect_platform` (currently fails,
+   documenting the bug).
 
 10. **Produce Bundler-aware binstubs like `bundlerEnv` does.**
     Our `buildEnv` creates a flat symlink forest of gems, but doesn't

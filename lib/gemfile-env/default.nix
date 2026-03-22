@@ -94,14 +94,21 @@ let
   # Layer: defaultGemConfig < nokogiriConfig < user gemConfig
   mergedGemConfig = defaultGemConfig // nokogiriConfig // gemConfig;
 
-  allGems = lib.lists.map (
-    gemAttrs:
-    buildRubyGem (applyGemConfigs mergedGemConfig gemAttrs)
-  ) gemsForGroupsAndPlatforms;
-
-  # resolve platform duplicates: prefer exact arch match > compatible > ruby
-  platformResolvedGemsByName = resolvePlatforms resolvedPlatforms allGems;
-  finalGems = lib.attrsets.mapAttrsToList (gemName: gem: gem) platformResolvedGemsByName;
+  # Resolve platform duplicates FIRST: prefer exact arch match > compatible > ruby.
+  # This must happen before applyGemConfigs so that defaultGemConfig entries
+  # (which assume source compilation; i.e., Makefiles, build flags, patches) are
+  # only applied to ruby-platform gems, not precompiled native variants.
+  platformResolvedGemsByName = resolvePlatforms resolvedPlatforms gemsForGroupsAndPlatforms;
+  finalGems = lib.attrsets.mapAttrsToList (
+    gemName: gemAttrs:
+    let
+      configured =
+        if gemAttrs.platform == "ruby"
+        then applyGemConfigs mergedGemConfig gemAttrs
+        else gemAttrs;
+    in
+    buildRubyGem configured
+  ) platformResolvedGemsByName;
 in
 buildEnv {
   name = "${name}-${lib.strings.concatStringsSep "-" groups}-${lib.strings.concatStringsSep "-" resolvedPlatforms}";
