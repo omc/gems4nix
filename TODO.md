@@ -55,6 +55,19 @@
    picks the first one in list order, which depends on filter ordering.
    There is no preference ranking among non-ruby platforms.
 
+   Bundler's own precedence is: exact arch match > compatible match (e.g.,
+   `universal-darwin`) > pure ruby. `resolvePlatforms` should accept the
+   `platformsForSystem` list (which is ordered by preference) and use it
+   to rank candidates. In practice no gem currently ships both
+   `arm64-darwin` and `universal-darwin` variants, so this is latent, but
+   the behavior should be correct before it matters.
+
+   **Action:** Change `resolvePlatforms` to take a `preferredPlatforms`
+   list (ordered most-specific-first) and pick the first candidate that
+   appears earliest in that list. Add a test with synthetic gems that
+   have both `arm64-darwin` and `universal-darwin` variants to verify the
+   exact-match-wins behavior.
+
 9. **`gemConfig` shadows the function argument.**
    The `let` block defines a local `gemConfig` that merges
    `defaultGemConfig` with a custom nokogiri config. But the function

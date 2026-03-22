@@ -99,8 +99,8 @@ let
     buildRubyGem (applyGemConfigs mergedGemConfig gemAttrs)
   ) gemsForGroupsAndPlatforms;
 
-  # resolve platform duplicates: prefer platform-specific over pure ruby
-  platformResolvedGemsByName = resolvePlatforms allGems;
+  # resolve platform duplicates: prefer exact arch match > compatible > ruby
+  platformResolvedGemsByName = resolvePlatforms resolvedPlatforms allGems;
   finalGems = lib.attrsets.mapAttrsToList (gemName: gem: gem) platformResolvedGemsByName;
 in
 buildEnv {

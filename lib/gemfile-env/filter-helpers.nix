@@ -43,25 +43,40 @@
     else
       throw "platformsForSystem: unsupported system '${system}'. Pass an explicit `platforms` list or extend platformsForSystem.";
 
-  # Given a list of gems (possibly containing duplicates for different
-  # platforms), resolve to one gem per name. Prefer platform-specific gems
-  # over pure-ruby ones.
+  # Given a preference-ordered platform list and a list of gems (possibly
+  # containing duplicates for different platforms), resolve to one gem per
+  # name. Candidates are ranked by position in preferredPlatforms,
+  # earlier entries win. This means: exact arch match > compatible match
+  # (e.g., universal-darwin) > pure ruby.
+  #
+  # preferredPlatforms: list from platformsForSystem, e.g.,
+  #   ["ruby" "arm64-darwin" "universal-darwin"]
+  # gems: flat list of gem attrsets (may have duplicate gemNames)
   #
   # Returns: attrset of gemName -> single gem
-  resolvePlatforms = gems:
+  resolvePlatforms = preferredPlatforms: gems:
     let
       gemsByName = builtins.groupBy (g: g.gemName) gems;
+
+      # Rank a gem by its platform's position in preferredPlatforms.
+      # Non-"ruby" platforms are preferred, then by list order within those.
+      # Platforms not in the list get a very high rank (filtered out earlier,
+      # but defensive).
+      rankGem = gem:
+        let
+          idx = lib.lists.findFirstIndex (p: p == gem.platform) 9999 preferredPlatforms;
+          # Bias: non-ruby platforms get priority over ruby regardless of
+          # list position, to preserve the "prefer native" invariant.
+          # Within non-ruby, earlier in the list wins.
+          isRuby = gem.platform == "ruby";
+        in
+        if isRuby then 10000 + idx else idx;
     in
     builtins.mapAttrs (
       gemName: gemsForName:
       let
-        otherPlatformGems = builtins.filter (g: g.platform != "ruby") gemsForName;
-        rubyPlatformGems = builtins.filter (g: g.platform == "ruby") gemsForName;
+        ranked = builtins.sort (a: b: rankGem a < rankGem b) gemsForName;
       in
-      # TODO: noisy warning if we have more than one in either branch here
-      if otherPlatformGems != [ ] then
-        builtins.elemAt otherPlatformGems 0
-      else
-        builtins.elemAt rubyPlatformGems 0
+      builtins.head ranked
     ) gemsByName;
 }

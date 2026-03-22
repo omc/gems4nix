@@ -112,9 +112,12 @@ let
 
   # ── resolvePlatforms ─────────────────────────────────────────
 
+  # Default preference list for existing tests (aarch64-darwin)
+  darwinPrefs = platformsForSystem "aarch64-darwin";
+
   test_resolve_prefers_specific =
     let
-      result = resolvePlatforms [ gemNokogiriRuby gemNokogiriArm ];
+      result = resolvePlatforms darwinPrefs [ gemNokogiriRuby gemNokogiriArm ];
     in
     assertEq "resolvePlatforms: prefers platform-specific over ruby"
       result.nokogiri.platform
@@ -122,7 +125,7 @@ let
 
   test_resolve_ruby_only =
     let
-      result = resolvePlatforms [ gemRake ];
+      result = resolvePlatforms darwinPrefs [ gemRake ];
     in
     assertEq "resolvePlatforms: falls back to ruby when only option"
       result.rake.platform
@@ -130,17 +133,19 @@ let
 
   test_resolve_multiple_specific =
     let
-      # both arm64-darwin and x86_64-darwin present: picks first non-ruby
-      result = resolvePlatforms [ gemNokogiriArm gemNokogiriX86 ];
+      # both arm64-darwin and x86_64-darwin present: arm64-darwin appears in
+      # darwinPrefs, x86_64-darwin does not, so arm64 wins by rank
+      result = resolvePlatforms darwinPrefs [ gemNokogiriArm gemNokogiriX86 ];
     in
-    # documents current behavior: first platform-specific wins
-    assertEq "resolvePlatforms: multiple specific platforms, first wins"
+    assertEq "resolvePlatforms: picks platform present in preference list"
       result.nokogiri.platform
       "arm64-darwin";
 
   test_resolve_mixed_gems =
     let
-      result = resolvePlatforms [ gemRake gemNokogiriRuby gemNokogiriArm gemFfiLinux ];
+      # Use a combined prefs list that covers both darwin and linux platforms
+      mixedPrefs = [ "ruby" "arm64-darwin" "universal-darwin" "aarch64-linux-gnu" ];
+      result = resolvePlatforms mixedPrefs [ gemRake gemNokogiriRuby gemNokogiriArm gemFfiLinux ];
       names = builtins.attrNames result;
     in
     assertEq "resolvePlatforms: groups by name correctly"
@@ -320,6 +325,48 @@ let
     && assertEq "platformsForSystem integration: x86_64-darwin gem rejected on aarch64-darwin"
       rejects false;
 
+  # ── resolvePlatforms preference ordering (#8) ───────────────
+  #
+  # When both an exact arch match and a compatible match (e.g.,
+  # arm64-darwin and universal-darwin) pass the platform filter,
+  # resolvePlatforms should prefer the one appearing earlier in
+  # the preferredPlatforms list (from platformsForSystem).
+
+  gemNokogiriUniversal = mkGem { gemName = "nokogiri"; platform = "universal-darwin"; };
+
+  # Scenario: arm64-darwin should win over universal-darwin on aarch64-darwin
+  # because platformsForSystem "aarch64-darwin" = ["ruby" "arm64-darwin" "universal-darwin"]
+  test_resolve_prefers_exact_over_compatible =
+    let
+      prefs = platformsForSystem "aarch64-darwin"; # ["ruby" "arm64-darwin" "universal-darwin"]
+      # Pass gems in reverse preference order to ensure it's ranking, not insertion order
+      result = resolvePlatforms prefs [ gemNokogiriUniversal gemNokogiriArm ];
+    in
+    assertEq "resolvePlatforms: prefers arm64-darwin over universal-darwin on aarch64-darwin"
+      result.nokogiri.platform
+      "arm64-darwin";
+
+  # Scenario: when only universal-darwin is available (no exact match), it wins over ruby
+  test_resolve_compatible_over_ruby =
+    let
+      prefs = platformsForSystem "aarch64-darwin";
+      result = resolvePlatforms prefs [ gemNokogiriRuby gemNokogiriUniversal ];
+    in
+    assertEq "resolvePlatforms: prefers universal-darwin over ruby"
+      result.nokogiri.platform
+      "universal-darwin";
+
+  # Scenario: x86_64-darwin should pick x86_64-darwin, not universal-darwin
+  test_resolve_x86_prefers_exact =
+    let
+      prefs = platformsForSystem "x86_64-darwin";
+      gemNokogiriX86Universal = mkGem { gemName = "nokogiri"; platform = "universal-darwin"; };
+      result = resolvePlatforms prefs [ gemNokogiriX86Universal gemNokogiriX86 ];
+    in
+    assertEq "resolvePlatforms: prefers x86_64-darwin over universal-darwin on x86_64-darwin"
+      result.nokogiri.platform
+      "x86_64-darwin";
+
   # ── all tests ────────────────────────────────────────────────
 
   allTests =
@@ -350,6 +397,10 @@ let
     && test_applyGemConfigs_empty_config
     # critique #9: shadowing
     && test_gemConfig_shadowing_bug
+    # critique #8: platform preference ordering
+    && test_resolve_prefers_exact_over_compatible
+    && test_resolve_compatible_over_ruby
+    && test_resolve_x86_prefers_exact
     # critique #19: platformsForSystem
     && test_platformsForSystem_aarch64_darwin
     && test_platformsForSystem_x86_64_darwin
