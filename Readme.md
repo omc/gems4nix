@@ -75,14 +75,37 @@ the order is `["ruby" "arm64-darwin" "universal-darwin"]`, so an exact
 arch match always beats a compatible one, and any native variant beats
 pure ruby.
 
+## Testing
+
+Unit tests for the parser and filter helpers:
+
+```sh
+nix eval --file test/unit/test-parser.nix --json
+nix eval --file test/unit/test-filter.nix --json
+```
+
+Integration tests via `examples/`:
+
+```sh
+cd examples/simple  && nix flake check --no-write-lock-file
+cd examples/medium  && nix flake check --no-write-lock-file
+cd examples/complex && nix flake check --no-write-lock-file
+```
+
+| Example   | Gems | What it tests |
+|-----------|------|---------------|
+| `simple`  | rack, rake | Pure-ruby gems load and report correct versions |
+| `medium`  | nokogiri, puma, ethon, rack, minitest | Native platform variants, group filtering, `defaultGemConfig` overrides |
+| `complex` | Rails 8, ffi, nokogiri, bootsnap, errgonomic (git), hello_gem (path) | Full Rails env, git/path sources (SKIP until TODO #13) |
+
+See `TESTING.md` for the full test strategy, structure, and red-green-refactor workflow.
+
 ## WIP
 
-This is a few days of coding. It's being used in prod but for a specific Rails app and its gems that gets daily attention from a team. There is probably more generalized usage to take into account and collect into unit tests. Still, in general, the hard parts are already solved in nixpkgs, this is just an alternate routes to collecting the relevant attributes for each gem.
+This is a few days of coding. It's being used in prod but for a specific Rails app and its gems that gets daily attention from a team. There is probably more generalized usage to take into account and collect into unit tests. Still, in general, the hard parts are already solved in nixpkgs, this is just an alternate route to collecting the relevant attributes for each gem.
 
-- Bundling gems from source (git or path). Not too bad, buildRubyGem should do this for us, we just need to parse the Gemfile and Gemfile.lock correctly.
-- It looks like buildRubyGem supports multiple remotes? Need to understand what that's about. Similar to the above.
-- bundlerEnv has a much more complicated (generalizable?) buildEnv, need to study the differences.
-- In all cases, we need better testing. Unit tests exist for parser and filter helpers (`test/unit/`); see `TESTING.md`.
-- We rely on `buildRubyGems` and should verify a minimum supported version of nixpkgs for its behavior.
+- Git and path gem sources. The parser gracefully skips these (no crash), but the gems aren't included in the environment. `buildRubyGem` already handles both source types; we just need to parse the `GIT` and `PATH` lockfile sections.
+- `bundlerEnv` has a much more capable `buildEnv` with Bundler-aware binstubs. Need to study the differences and decide what to adopt.
+- See `TODO.md` for the full list of critiques and upstream alignment opportunities.
 
 Once these are in a good place, I'm also thinking about pre Bundler 2.6 backwards compatibility. Maybe this is worth its own standalone tool to generate the hashes, if we have created compelling solutions to the other quirks present in Bundix.

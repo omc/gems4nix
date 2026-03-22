@@ -27,8 +27,11 @@
    silently arbitrary rather than loudly wrong.
 
 4. **No support for git or path sources.**
-   Gems sourced from git repos or local paths are silently ignored or cause
-   errors. This is acknowledged in the README but there's no guard or warning.
+   Gems sourced from git repos or local paths are gracefully skipped by the
+   parser (their hashless checksum lines return null) but are not included
+   in the built environment. The `examples/complex/` integration test
+   documents this: `errgonomic` (git) and `hello_gem` (path) print SKIP
+   rather than OK. See also #13.
 
 ### Filtering and Building (`default.nix`)
 
@@ -42,7 +45,10 @@
 ### General
 
 6. **No CI or automated test invocation.**
-   Tests are run manually. No flake check, no `nix flake check` integration.
+   Unit tests run via `nix eval`. Integration tests run via
+   `nix flake check` in each `examples/` subdirectory. Neither is wired
+   into CI yet. A top-level `nix flake check` that runs everything would
+   be the next step.
 
 7. **`gem-groups.rb` group propagation may over-propagate.**
    The Ruby script iterates all specs and propagates groups through

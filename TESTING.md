@@ -30,13 +30,27 @@ lib/gemfile-env/
 test/
 ├── test-helpers.nix                   # shared assertEq, assertThrows
 ├── test.nix                           # integration test (full Rails build)
-├── unit/
-│   ├── test-parser.nix                # unit tests for parser-helpers.nix
-│   └── test-filter.nix                # unit tests for filter-helpers.nix
-└── rails/
+└── unit/
+    ├── test-parser.nix                # unit tests for parser-helpers.nix
+    └── test-filter.nix                # unit tests for filter-helpers.nix
+
+examples/
+├── simple/                            # pure-ruby gems (rack, rake)
+│   ├── flake.nix
+│   ├── Gemfile
+│   ├── Gemfile.lock
+│   └── validate.rb
+├── medium/                            # native gems (nokogiri, puma, ethon)
+│   ├── flake.nix
+│   ├── Gemfile
+│   ├── Gemfile.lock
+│   └── validate.rb
+└── complex/                           # Rails 8, git source, path source
+    ├── flake.nix
     ├── Gemfile
     ├── Gemfile.lock
-    └── gemset.nix
+    ├── validate.rb
+    └── vendor/hello_gem/              # local path gem for testing
 ```
 
 ### Architecture for testability
@@ -49,70 +63,77 @@ the helpers directly to avoid needing `callPackage`, `runCommand`, or Ruby.
 Shared assertion functions (`assertEq`, `assertThrows`) live in
 `test/test-helpers.nix` and are imported by all unit test files.
 
+### Unit tests
+
+Fast, pure Nix, no network or build. Test individual functions with
+synthetic inputs.
+
+- **`test-parser.nix`** -- `findIndices`, `takeLines`, `parseChecksumLine`,
+  `parseGemSection`, `parseLockfileContent`, `buildGemRemotes`,
+  `mergeGemMetadata`. Includes tests for malformed input (missing hash,
+  extra whitespace, missing sections) and git/path gem handling (hashless
+  checksum lines return null).
+
+- **`test-filter.nix`** -- `filterGroup`, `filterPlatform`,
+  `resolvePlatforms`, `applyGemConfigs`, `platformsForSystem`. Includes
+  preference ranking tests (exact arch > compatible > ruby), shadowing bug
+  regression, and system-to-platform mapping for all four supported systems.
+
+### Integration tests (`examples/`)
+
+Each example is a self-contained flake with a real Gemfile.lock (with
+checksums from rubygems.org), a Ruby validation script, and a `checks`
+output. The validation script requires each gem, calls a method to prove the
+native extension works, and exits nonzero on failure.
+
+| Example   | Gems | What it exercises |
+|-----------|------|-------------------|
+| `simple`  | 2 | Basic pipeline: parse, filter, build, load |
+| `medium`  | 5 | Native platform variants, group filtering, `defaultGemConfig` |
+| `complex` | 60+ | Full Rails, git/path sources (SKIP until implemented), transitive deps |
+
+The complex example's `validate.rb` uses `rescue LoadError` to SKIP
+git/path source gems rather than failing. When TODO #13 is implemented,
+those lines will start printing `OK` instead of `SKIP`, no test changes
+needed.
+
 ### Integration test (`test/test.nix`)
 
-The existing test that evaluates a full `gemfileEnv` against the Rails
-fixture. This remains as-is and validates the end-to-end pipeline.
-
-## What to Test
-
-### Parser unit tests (`test-parser.nix`)
-
-| Function            | Test case                                         | Validates                          |
-|---------------------|---------------------------------------------------|------------------------------------|
-| `findIndices`       | Multiple matches in a list                        | Returns all matching indices       |
-| `findIndices`       | No matches                                        | Returns empty list                 |
-| `findIndices`       | Single match                                      | Returns singleton list             |
-| `takeLines`         | Lines until first blank                           | Stops at empty string              |
-| `takeLines`         | No blank line (runs to end)                       | Returns remaining lines            |
-| `takeLines`         | Blank line immediately after header               | Returns empty list                 |
-| `parseChecksumLine` | Simple gem (no platform)                          | Correct name, version, sha256      |
-| `parseChecksumLine` | Platform-specific gem (`arm64-darwin`)             | Platform parsed, not in version    |
-| `parseChecksumLine` | Multi-segment platform (`aarch64-linux-gnu`)       | Full platform string preserved     |
-| `parseChecksumLine` | Multi-segment version (`1.18.8`)                  | Version not split on dots          |
-| `parseGemSection`   | Standard rubygems section                         | Remote URL and gem list extracted   |
-| `parseGemSection`   | Remote with trailing slash                        | Trailing slash stripped             |
-| `parseGemSection`   | Remote without trailing slash                     | URL preserved as-is                |
-| `parseGemSection`   | Gems with complex dependency lines                | Only gem names extracted            |
-
-### Filter unit tests (`test-filter.nix`)
-
-| Function              | Test case                                       | Validates                          |
-|-----------------------|-------------------------------------------------|------------------------------------|
-| `filterGroup`         | Gem with matching group                         | Included                           |
-| `filterGroup`         | Gem with no matching group                      | Excluded                           |
-| `filterGroup`         | Gem with multiple groups, one matches            | Included                           |
-| `filterGroup`         | Gem with empty groups                           | Excluded                           |
-| `filterPlatform`      | Gem matches one of requested platforms           | Included                           |
-| `filterPlatform`      | Gem platform not in requested list               | Excluded                           |
-| `filterPlatform`      | "ruby" platform gem with "ruby" requested        | Included                           |
-| Platform resolution   | Platform-specific preferred over ruby            | Non-ruby gem selected              |
-| Platform resolution   | Only ruby available                              | Ruby gem selected                  |
-| Platform resolution   | Multiple non-ruby platforms                      | First one selected (documents behavior) |
+The original test that evaluates a full `gemfileEnv` against the
+`test/rails/` fixture. Validates the end-to-end pipeline including
+`gem-groups.rb` group extraction.
 
 ## Running Tests
 
-### Run all unit tests
+### Unit tests
 
 ```sh
-# Parser unit tests
 nix eval --file test/unit/test-parser.nix --json
-
-# Filter unit tests
 nix eval --file test/unit/test-filter.nix --json
-
-# Both (bash one-liner)
-nix eval --file test/unit/test-parser.nix --json && \
-nix eval --file test/unit/test-filter.nix --json && \
-echo "all unit tests passed"
 ```
 
-### Run integration test
+### Integration tests
 
 ```sh
-nix eval --file test/test.nix
-# or, to actually build the gem environment:
-nix build --file test/test.nix
+# Individual example
+cd examples/simple && nix flake check --no-write-lock-file
+
+# All examples
+for ex in simple medium complex; do
+  (cd examples/$ex && nix flake check --no-write-lock-file)
+done
+```
+
+### Everything
+
+```sh
+nix eval --file test/unit/test-parser.nix --json && \
+nix eval --file test/unit/test-filter.nix --json && \
+echo "unit tests passed" && \
+for ex in simple medium complex; do
+  (cd examples/$ex && nix flake check --no-write-lock-file) || exit 1
+done && \
+echo "all tests passed"
 ```
 
 ### Red-green-refactor example
@@ -122,7 +143,7 @@ nix build --file test/test.nix
 nix eval --file test/unit/test-parser.nix --json
 # => error: ... (test fails; good, the bug is confirmed)
 
-# 2. GREEN: fix the code in lib/gemfile-env/parse-gemfile-and-lockfile.nix
+# 2. GREEN: fix the code in lib/gemfile-env/parser-helpers.nix
 nix eval --file test/unit/test-parser.nix --json
 # => true (test passes; fix is correct)
 
