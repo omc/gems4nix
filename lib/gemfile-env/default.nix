@@ -43,12 +43,17 @@ let
 
   # ── filtering (pure logic lives in filter-helpers.nix) ───────
   filterHelpers = import ./filter-helpers.nix { inherit lib; };
-  inherit (filterHelpers) filterGroup filterPlatform resolvePlatforms applyGemConfigs platformsForSystem;
+  inherit (filterHelpers)
+    filterGroup
+    filterPlatform
+    resolvePlatforms
+    applyGemConfigs
+    platformsForSystem
+    ;
 
   # Resolve platforms: user-supplied list, or auto-detect from stdenv
   resolvedPlatforms =
-    if platforms != null then platforms
-    else platformsForSystem stdenv.hostPlatform.system;
+    if platforms != null then platforms else platformsForSystem stdenv.hostPlatform.system;
 
   gemsForGroups = builtins.filter (filterGroup groups) gemMetadata;
   gemsForGroupsAndPlatforms = builtins.filter (filterPlatform resolvedPlatforms) gemsForGroups;
@@ -61,23 +66,22 @@ let
       attrs:
       (
         {
-          buildFlags =
-            [
-              "--use-system-libraries"
-              "--with-zlib-lib=${zlib.out}/lib"
-              "--with-zlib-include=${zlib.dev}/include"
-              "--with-xml2-lib=${libxml2.out}/lib"
-              "--with-xml2-include=${libxml2.dev}/include/libxml2"
-              "--with-xslt-lib=${libxslt.out}/lib"
-              "--with-xslt-include=${libxslt.dev}/include"
-              "--with-exslt-lib=${libxslt.out}/lib"
-              "--with-exslt-include=${libxslt.dev}/include"
-              "--gumbo-dev"
-            ]
-            ++ lib.optionals stdenv.hostPlatform.isDarwin [
-              "--with-iconv-dir=${libiconv}"
-              "--with-opt-include=${libiconv}/include"
-            ];
+          buildFlags = [
+            "--use-system-libraries"
+            "--with-zlib-lib=${zlib.out}/lib"
+            "--with-zlib-include=${zlib.dev}/include"
+            "--with-xml2-lib=${libxml2.out}/lib"
+            "--with-xml2-include=${libxml2.dev}/include/libxml2"
+            "--with-xslt-lib=${libxslt.out}/lib"
+            "--with-xslt-include=${libxslt.dev}/include"
+            "--with-exslt-lib=${libxslt.out}/lib"
+            "--with-exslt-include=${libxslt.dev}/include"
+            "--gumbo-dev"
+          ]
+          ++ lib.optionals stdenv.hostPlatform.isDarwin [
+            "--with-iconv-dir=${libiconv}"
+            "--with-opt-include=${libiconv}/include"
+          ];
         }
         // lib.optionalAttrs stdenv.hostPlatform.isDarwin {
           buildInputs = [ libxml2 ];
@@ -103,9 +107,7 @@ let
     gemName: gemAttrs:
     let
       configured =
-        if gemAttrs.platform == "ruby"
-        then applyGemConfigs mergedGemConfig gemAttrs
-        else gemAttrs;
+        if gemAttrs.platform == "ruby" then applyGemConfigs mergedGemConfig gemAttrs else gemAttrs;
     in
     buildRubyGem configured
   ) platformResolvedGemsByName;

@@ -20,43 +20,73 @@
     };
   };
 
-  outputs = { nixpkgs, gems4nix, ... }:
+  outputs =
+    { nixpkgs, gems4nix, ... }:
     let
-      allSystems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
-      forAllSystems = f: nixpkgs.lib.genAttrs allSystems (system: f {
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [ gems4nix.overlays.default ];
-        };
-      });
+      allSystems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
+      forAllSystems =
+        f:
+        nixpkgs.lib.genAttrs allSystems (
+          system:
+          f {
+            pkgs = import nixpkgs {
+              inherit system;
+              overlays = [ gems4nix.overlays.default ];
+            };
+          }
+        );
     in
     {
-      packages = forAllSystems ({ pkgs }: {
-        gems = pkgs.gemfileEnv {
-          name = "complex-example";
-          gemfile = ./Gemfile;
-          gemfileLock = ./Gemfile.lock;
-          groups = [ "default" "development" "test" ];
-        };
-      });
+      packages = forAllSystems (
+        { pkgs }:
+        {
+          gems = pkgs.gemfileEnv {
+            name = "complex-example";
+            gemfile = ./Gemfile;
+            gemfileLock = ./Gemfile.lock;
+            groups = [
+              "default"
+              "development"
+              "test"
+            ];
+          };
+        }
+      );
 
-      checks = forAllSystems ({ pkgs }:
+      checks = forAllSystems (
+        { pkgs }:
         let
           gems = pkgs.gemfileEnv {
             name = "complex-example";
             gemfile = ./Gemfile;
             gemfileLock = ./Gemfile.lock;
-            groups = [ "default" "development" "test" ];
+            groups = [
+              "default"
+              "development"
+              "test"
+            ];
           };
         in
         {
-          validate = pkgs.runCommand "complex-validate" {
-            buildInputs = [ pkgs.ruby gems ];
-          } ''
-            export GEM_PATH="${gems}/${pkgs.ruby.gemPath}"
-            ruby ${./validate.rb}
-            touch $out
-          '';
-        });
+          validate =
+            pkgs.runCommand "complex-validate"
+              {
+                buildInputs = [
+                  pkgs.ruby
+                  gems
+                ];
+              }
+              ''
+                export GEM_PATH="${gems}/${pkgs.ruby.gemPath}"
+                ruby ${./validate.rb}
+                touch $out
+              '';
+        }
+      );
     };
 }

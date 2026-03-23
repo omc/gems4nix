@@ -102,21 +102,22 @@ let
       sha256 = builtins.elemAt hashParts 1;
     in
     # Git/path gems without a hash: return null (skipped by caller)
-    if isHashless then null
+    if isHashless then
+      null
     else
-    assert _ == true;
-    assert __ == true;
-    assert ___ == true;
-    {
-      inherit
-        version
-        platform
-        gemName
-        ;
-      source = {
-        inherit sha256;
+      assert _ == true;
+      assert __ == true;
+      assert ___ == true;
+      {
+        inherit
+          version
+          platform
+          gemName
+          ;
+        source = {
+          inherit sha256;
+        };
       };
-    };
 
   # given a bunch of lines that represent a GEM section, return the remote and the list of gems.
   # we're not concerned with the version specs here, since we'll get that later from the checksum.
@@ -144,7 +145,8 @@ let
 
   # Parse the full content of a Gemfile.lock into its checksum and GEM sections.
   # Returns: { checksumSection, gemSections }
-  parseLockfileContent = content:
+  parseLockfileContent =
+    content:
     let
       lines = lib.splitString "\n" content;
 
@@ -156,7 +158,9 @@ let
         else
           takeLines checksumSectionIndex lines;
       # parseChecksumLine returns null for git/path gems (no hash); filter them out.
-      checksumSection = builtins.filter (x: x != null) (lib.lists.map parseChecksumLine checksumSectionLines);
+      checksumSection = builtins.filter (x: x != null) (
+        lib.lists.map parseChecksumLine checksumSectionLines
+      );
 
       # GEM sections (may have more than one remote)
       gemSectionIndices = findIndices (l: l == "GEM") lines;
@@ -169,13 +173,16 @@ let
       gemSections = lib.lists.map parseGemSection gemSectionLines;
     in
     assert _ == true;
-    { inherit checksumSection gemSections; };
+    {
+      inherit checksumSection gemSections;
+    };
 
   # Invert gem sections into a flat { gemName = remote; ... } lookup.
   # Last-writer-wins when a gem appears in multiple sections.
   # TODO: group by gem name for multiple remotes; e.g., depot depends on faraday
   # which shows up in both but we prefer rubygems.org.
-  buildGemRemotes = gemSections:
+  buildGemRemotes =
+    gemSections:
     builtins.listToAttrs (
       lib.lists.flatten (
         lib.lists.map (
@@ -190,7 +197,12 @@ let
 
   # Merge parsed checksums with group info and remote URLs into the final
   # gem metadata list that the rest of the pipeline expects.
-  mergeGemMetadata = { checksumSection, gemRemotes, gemGroups }:
+  mergeGemMetadata =
+    {
+      checksumSection,
+      gemRemotes,
+      gemGroups,
+    }:
     lib.lists.map (gemAttrs: {
       inherit (gemAttrs)
         gemName

@@ -12,43 +12,71 @@
     };
   };
 
-  outputs = { nixpkgs, gems4nix, ... }:
+  outputs =
+    { nixpkgs, gems4nix, ... }:
     let
-      allSystems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
-      forAllSystems = f: nixpkgs.lib.genAttrs allSystems (system: f {
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [ gems4nix.overlays.default ];
-        };
-      });
+      allSystems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
+      forAllSystems =
+        f:
+        nixpkgs.lib.genAttrs allSystems (
+          system:
+          f {
+            pkgs = import nixpkgs {
+              inherit system;
+              overlays = [ gems4nix.overlays.default ];
+            };
+          }
+        );
     in
     {
-      packages = forAllSystems ({ pkgs }: {
-        gems = pkgs.gemfileEnv {
-          name = "medium-example";
-          gemfile = ./Gemfile;
-          gemfileLock = ./Gemfile.lock;
-          groups = [ "default" "test" ];
-        };
-      });
+      packages = forAllSystems (
+        { pkgs }:
+        {
+          gems = pkgs.gemfileEnv {
+            name = "medium-example";
+            gemfile = ./Gemfile;
+            gemfileLock = ./Gemfile.lock;
+            groups = [
+              "default"
+              "test"
+            ];
+          };
+        }
+      );
 
-      checks = forAllSystems ({ pkgs }:
+      checks = forAllSystems (
+        { pkgs }:
         let
           gems = pkgs.gemfileEnv {
             name = "medium-example";
             gemfile = ./Gemfile;
             gemfileLock = ./Gemfile.lock;
-            groups = [ "default" "test" ];
+            groups = [
+              "default"
+              "test"
+            ];
           };
         in
         {
-          validate = pkgs.runCommand "medium-validate" {
-            buildInputs = [ pkgs.ruby gems ];
-          } ''
-            export GEM_PATH="${gems}/${pkgs.ruby.gemPath}"
-            ruby ${./validate.rb}
-            touch $out
-          '';
-        });
+          validate =
+            pkgs.runCommand "medium-validate"
+              {
+                buildInputs = [
+                  pkgs.ruby
+                  gems
+                ];
+              }
+              ''
+                export GEM_PATH="${gems}/${pkgs.ruby.gemPath}"
+                ruby ${./validate.rb}
+                touch $out
+              '';
+        }
+      );
     };
 }
