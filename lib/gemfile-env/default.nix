@@ -24,60 +24,64 @@
   name,
   gemfile,
   gemfileLock,
-  platforms ? [ "ruby" ],
+  platforms ? null, # null = auto-detect from stdenv.hostPlatform.system
   groups ? [
     "default"
     "development"
     "production"
     "test"
   ],
-  # this isn't coming in the way I expect...
   gemConfig ? defaultGemConfig,
   ruby ? ruby,
   ...
 }:
 let
 
-  # TODO update output of parser to better suit buildRubyGem
+  # ── parsing ──────────────────────────────────────────────────
   parseGemfileAndLockfile = callPackage ./parse-gemfile-and-lockfile.nix { };
   gemMetadata = parseGemfileAndLockfile { inherit gemfile gemfileLock; };
 
-  filterGroup = groups: gem: builtins.length (lib.lists.intersectLists groups gem.groups) > 0;
-  filterPlatform = groups: gem: lib.lists.any (p: p == gem.platform) platforms;
+  # ── filtering (pure logic lives in filter-helpers.nix) ───────
+  filterHelpers = import ./filter-helpers.nix { inherit lib; };
+  inherit (filterHelpers)
+    filterGroup
+    filterPlatform
+    resolvePlatforms
+    applyGemConfigs
+    platformsForSystem
+    ;
+
+  # Resolve platforms: user-supplied list, or auto-detect from stdenv
+  resolvedPlatforms =
+    if platforms != null then platforms else platformsForSystem stdenv.hostPlatform.system;
 
   gemsForGroups = builtins.filter (filterGroup groups) gemMetadata;
-  gemsForGroupsAndPlatforms = builtins.filter (filterPlatform platforms) gemsForGroups;
+  gemsForGroupsAndPlatforms = builtins.filter (filterPlatform resolvedPlatforms) gemsForGroups;
 
-  # _foo = builtins.trace defaultGemConfig defaultGemConfig;
-
-  # TODO figure out how to use ruby-modules/bundled-common/functions.nix
-  applyGemConfigs =
-    attrs: (if gemConfig ? ${attrs.gemName} then attrs // gemConfig.${attrs.gemName} attrs else attrs);
-
-  # customize nokogiri config to add --gumbo-dev build option
-  # TODO: fix upstream or make bits of gemConfig more accessible via gemEnv
-  gemConfig = defaultGemConfig // {
+  # Merge user-supplied gemConfig with our local overrides (e.g., nokogiri).
+  # The user's config takes precedence: if they supply a nokogiri entry, it
+  # replaces ours. To layer on top of ours, they can import and extend it.
+  nokogiriConfig = {
     nokogiri =
       attrs:
       (
         {
-          buildFlags =
-            [
-              "--use-system-libraries"
-              "--with-zlib-lib=${zlib.out}/lib"
-              "--with-zlib-include=${zlib.dev}/include"
-              "--with-xml2-lib=${libxml2.out}/lib"
-              "--with-xml2-include=${libxml2.dev}/include/libxml2"
-              "--with-xslt-lib=${libxslt.out}/lib"
-              "--with-xslt-include=${libxslt.dev}/include"
-              "--with-exslt-lib=${libxslt.out}/lib"
-              "--with-exslt-include=${libxslt.dev}/include"
-              "--gumbo-dev"
-            ]
-            ++ lib.optionals stdenv.hostPlatform.isDarwin [
-              "--with-iconv-dir=${libiconv}"
-              "--with-opt-include=${libiconv}/include"
-            ];
+          buildFlags = [
+            "--use-system-libraries"
+            "--with-zlib-lib=${zlib.out}/lib"
+            "--with-zlib-include=${zlib.dev}/include"
+            "--with-xml2-lib=${libxml2.out}/lib"
+            "--with-xml2-include=${libxml2.dev}/include/libxml2"
+            "--with-xslt-lib=${libxslt.out}/lib"
+            "--with-xslt-include=${libxslt.dev}/include"
+            "--with-exslt-lib=${libxslt.out}/lib"
+            "--with-exslt-include=${libxslt.dev}/include"
+            "--gumbo-dev"
+          ]
+          ++ lib.optionals stdenv.hostPlatform.isDarwin [
+            "--with-iconv-dir=${libiconv}"
+            "--with-opt-include=${libiconv}/include"
+          ];
         }
         // lib.optionalAttrs stdenv.hostPlatform.isDarwin {
           buildInputs = [ libxml2 ];
@@ -91,34 +95,24 @@ let
       );
   };
 
-  allGems = lib.lists.map (
-    gemAttrs:
+  # Layer: defaultGemConfig < nokogiriConfig < user gemConfig
+  mergedGemConfig = defaultGemConfig // nokogiriConfig // gemConfig;
+
+  # Resolve platform duplicates FIRST: prefer exact arch match > compatible > ruby.
+  # This must happen before applyGemConfigs so that defaultGemConfig entries
+  # (which assume source compilation; i.e., Makefiles, build flags, patches) are
+  # only applied to ruby-platform gems, not precompiled native variants.
+  platformResolvedGemsByName = resolvePlatforms resolvedPlatforms gemsForGroupsAndPlatforms;
+  finalGems = lib.attrsets.mapAttrsToList (
+    gemName: gemAttrs:
     let
-      attrs = (applyGemConfigs gemAttrs);
+      configured =
+        if gemAttrs.platform == "ruby" then applyGemConfigs mergedGemConfig gemAttrs else gemAttrs;
     in
-    buildRubyGem attrs
-  ) gemsForGroupsAndPlatforms;
-
-  # we may have multiple gems with the same name, e.g., for different platforms
-  gemsByName = builtins.groupBy (g: g.gemName) allGems;
-
-  # resolve gems based on a preferred platform
-  platformResolvedGemsByName = builtins.mapAttrs (
-    gemName: gems:
-    let
-      otherPlatformGems = builtins.filter (g: g.platform != "ruby") gems;
-      rubyPlatformGems = builtins.filter (g: g.platform == "ruby") gems;
-    in
-    # TODO: noisy warning if we have more than one in either branch here
-    if otherPlatformGems != [ ] then
-      builtins.elemAt otherPlatformGems 0
-    else
-      builtins.elemAt rubyPlatformGems 0
-  ) gemsByName;
-
-  finalGems = lib.attrsets.mapAttrsToList (gemName: gem: gem) platformResolvedGemsByName;
+    buildRubyGem configured
+  ) platformResolvedGemsByName;
 in
 buildEnv {
-  name = "${name}-${lib.strings.concatStringsSep "-" groups}-${lib.strings.concatStringsSep "-" platforms}";
+  name = "${name}-${lib.strings.concatStringsSep "-" groups}-${lib.strings.concatStringsSep "-" resolvedPlatforms}";
   paths = finalGems;
 }
