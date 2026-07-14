@@ -2,19 +2,15 @@
 
 ## Pipeline
 
-```
-Gemfile + Gemfile.lock
-      |
-  [ parse.nix ]          Pure Nix. Reads lockfile text, produces list of
-      |                  { gemName, version, platform, source, sha256, groups }.
-      v
-  [ resolve.nix ]        Pure Nix. Filters by groups, filters by platforms,
-      |                  expands transitive deps, resolves one variant per name.
-      v
-  [ default.nix ]        Nixpkgs. Applies gemConfig, calls buildRubyGem,
-      |                  combines into buildEnv.
-      v
-  <derivation>           A Nix store path with all gems on GEM_PATH.
+```mermaid
+flowchart TD
+    input([Gemfile + Gemfile.lock])
+    parse["<b>parse.nix</b> — pure Nix<br/>reads lockfile text<br/>emits { gemName, version, platform, source, sha256, groups }"]
+    resolve["<b>resolve.nix</b> — pure Nix<br/>filters by group and platform<br/>expands transitive deps<br/>picks one variant per name"]
+    build["<b>default.nix</b> — nixpkgs<br/>applies gemConfig<br/>calls buildRubyGem<br/>combines into buildEnv"]
+    output([Derivation with all gems on GEM_PATH])
+
+    input --> parse --> resolve --> build --> output
 ```
 
 ## Key Design Decisions
