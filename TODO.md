@@ -1,5 +1,7 @@
 # TODO
 
+> For the latest status, see [GitHub Issues](https://github.com/omc/gems4nix/issues).
+
 ## Critiques and Recommendations
 
 ### Parser (`parse-gemfile-and-lockfile.nix`)
@@ -23,7 +25,7 @@
    `builtins.listToAttrs` on a flattened list means if the same gem name
    appears in multiple GEM sections (e.g., `faraday` from both rubygems.org
    and a private registry), only the first section's remote survives. The TODO
-   in `parser-helpers.nix` acknowledges this, but the current behavior is
+   in `parse.nix` acknowledges this, but the current behavior is
    silently arbitrary rather than loudly wrong.
 
 4. **No support for git or path sources.**
@@ -45,7 +47,7 @@
 
    Error: `Could not find 'mini_portile2' (~> 2.8.2)` during nokogiri build.
 
-   **Regression test:** `test/unit/test-filter.nix` →
+   **Regression test:** `test/unit/test-resolve-logic.nix` →
    `test_ruby_only_nokogiri_keeps_build_deps` (currently fails, documenting
    the bug).
 
@@ -83,7 +85,7 @@ the less we maintain and the more we benefit from upstream fixes.
    nixpkgs already has `filterGemset`, `platformMatches`, `groupMatches`,
    `applyGemConfigs`, and `composeGemAttrs` in
    `pkgs/development/ruby-modules/bundled-common/functions.nix`. Our
-   `filter-helpers.nix` reimplements some of these. The upstream versions
+   `resolve.nix` reimplements some of these. The upstream versions
    handle edge cases we don't yet (e.g., `platformMatches` checks
    `ruby.rubyEngine` and `version.majMin`, not raw platform strings;
    `groupMatches` always includes `"default"`; `filterGemset` recursively
@@ -132,7 +134,7 @@ the less we maintain and the more we benefit from upstream fixes.
    - Reorder the pipeline: resolve platforms *before* applying gem configs,
      so only the winning variant gets configured.
 
-   **Regression test:** `test/unit/test-filter.nix` →
+   **Regression test:** `test/unit/test-resolve-logic.nix` →
    `test_applyGemConfigs_should_respect_platform` (currently fails,
    documenting the bug).
 
@@ -163,7 +165,7 @@ the less we maintain and the more we benefit from upstream fixes.
     - Use `bundlerEnv` directly with our parsed output as the `gemset`
     - Incrementally adopt gems4nix without a hard cutover
 
-    **Action:** Add a `toGemset` function to `parser-helpers.nix` that
+    **Action:** Add a `toGemset` function to `parse.nix` that
     converts our internal representation to the `gemset.nix` format. This
     also serves as a migration path and compatibility layer.
 
