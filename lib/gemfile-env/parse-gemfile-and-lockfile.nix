@@ -29,6 +29,7 @@
   runCommand,
   ruby,
   bundler,
+  git,
   fetchurl,
   stdenv,
   defaultGemConfig,
@@ -105,9 +106,13 @@ let
     else
       runCommand "gem-groups-json"
         {
+          # git is needed because the canonical `bundle gem` gemspec computes
+          # spec.files via `IO.popen(%w[git ls-files -z])`. Without git on PATH
+          # that popen raises Errno::ENOENT and gemspec evaluation aborts.
           buildInputs = [
             ruby
             bundler
+            git
           ];
         }
         ''
