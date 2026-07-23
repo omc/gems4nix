@@ -1,45 +1,24 @@
-# Unit tests for filter-helpers.nix
+# Unit tests for resolve.nix (logic only, no fetchTarball)
 #
-# Run: nix eval --file test/unit/test-filter.nix --json
+# Accepts { lib }: so it can be imported by both:
+#   - The standalone wrapper (test-resolve.nix) for `nix eval --file` usage
+#   - The root flake.nix checks via `import ./test-resolve-logic.nix { lib = pkgs.lib; }`
+#
 # Returns: true (all assertions pass) or throws with a descriptive message.
 
+{ lib }:
+
 let
-  nixpkgs = import (fetchTarball {
-    url = "https://github.com/NixOS/nixpkgs/archive/nixos-24.11.tar.gz";
-  }) { };
-  lib = nixpkgs.lib;
-  filterHelpers = import ../../lib/gemfile-env/filter-helpers.nix { inherit lib; };
+  filterHelpers = import ../../lib/gemfile-env/resolve.nix { inherit lib; };
   inherit (filterHelpers)
     filterGroup
     filterPlatform
     resolvePlatforms
     applyGemConfigs
     platformsForSystem
+    expandTransitiveDeps
     ;
-  inherit (import ../test-helpers.nix) assertEq assertThrows;
-
-  # ── test fixtures ────────────────────────────────────────────
-
-  mkGem =
-    {
-      gemName,
-      platform ? "ruby",
-      groups ? [ "default" ],
-      version ? "1.0.0",
-    }:
-    {
-      inherit
-        gemName
-        platform
-        groups
-        version
-        ;
-      source = {
-        sha256 = "fake";
-        remotes = [ "https://rubygems.org" ];
-        type = "gem";
-      };
-    };
+  inherit (import ../helpers.nix) assertEq assertThrows mkGem;
 
   gemRake = mkGem {
     gemName = "rake";
@@ -536,20 +515,101 @@ let
       result.nokogiri.platform
       "x86_64-darwin";
 
+  # ── expandTransitiveDeps ──────────────────────────────────────
+
+  test_expandTransitiveDeps_basic =
+    let
+      depGraph = {
+        nokogiri = [
+          "mini_portile2"
+          "racc"
+        ];
+        racc = [ ];
+        mini_portile2 = [ ];
+      };
+      result = expandTransitiveDeps depGraph [ "nokogiri" ];
+    in
+    assertEq "expandTransitiveDeps: nokogiri pulls in mini_portile2"
+      (builtins.elem "mini_portile2" result)
+      true
+    && assertEq "expandTransitiveDeps: nokogiri pulls in racc" (builtins.elem "racc" result) true
+    && assertEq "expandTransitiveDeps: nokogiri itself included" (builtins.elem "nokogiri" result) true;
+
+  test_expandTransitiveDeps_transitive_chain =
+    let
+      # A depends on B, B depends on C
+      depGraph = {
+        a = [ "b" ];
+        b = [ "c" ];
+        c = [ ];
+      };
+      result = expandTransitiveDeps depGraph [ "a" ];
+    in
+    assertEq "expandTransitiveDeps: transitive chain A->B->C includes C" (builtins.elem "c" result) true
+    && assertEq "expandTransitiveDeps: transitive chain includes B" (builtins.elem "b" result) true
+    && assertEq "expandTransitiveDeps: transitive chain includes A" (builtins.elem "a" result) true;
+
+  test_expandTransitiveDeps_no_deps =
+    let
+      depGraph = {
+        rake = [ ];
+      };
+      result = expandTransitiveDeps depGraph [ "rake" ];
+    in
+    assertEq "expandTransitiveDeps: no deps is identity" result [ "rake" ];
+
+  test_expandTransitiveDeps_circular =
+    let
+      # A depends on B, B depends on A
+      depGraph = {
+        a = [ "b" ];
+        b = [ "a" ];
+      };
+      result = expandTransitiveDeps depGraph [ "a" ];
+      sorted = builtins.sort builtins.lessThan result;
+    in
+    assertEq "expandTransitiveDeps: circular deps converge" sorted [
+      "a"
+      "b"
+    ];
+
+  test_expandTransitiveDeps_unknown_dep_not_added =
+    let
+      # depGraph only knows about nokogiri; "unknown_gem" not in graph
+      depGraph = {
+        nokogiri = [ "mini_portile2" ];
+      };
+      result = expandTransitiveDeps depGraph [ "nokogiri" ];
+    in
+    # mini_portile2 IS added (it's a dep of nokogiri)
+    assertEq "expandTransitiveDeps: dep of known gem is added" (builtins.elem "mini_portile2" result)
+      true
+    # but only gems reachable from the initial set appear
+    && assertEq "expandTransitiveDeps: only reachable gems in result" (builtins.length result) 2;
+
+  test_expandTransitiveDeps_empty_initial =
+    let
+      depGraph = {
+        a = [ "b" ];
+      };
+      result = expandTransitiveDeps depGraph [ ];
+    in
+    assertEq "expandTransitiveDeps: empty initial set stays empty" result [ ];
+
   # ── regression: ruby-only nokogiri drops mini_portile2 ───────
   #
   # When a lockfile has only the `ruby` variant of nokogiri (no precompiled
   # platform gems), platform resolution selects it. The ruby variant needs
   # mini_portile2 to compile, but mini_portile2 gets groups=[] (transitive
   # build dep not in any Gemfile group) and filterGroup drops it.
-  # This causes: "Could not find 'mini_portile2' (~> 2.8.2)"
   #
-  # This test documents the bug. When fixed, it should pass.
+  # Fixed by expandTransitiveDeps: after group filtering, we expand
+  # transitive deps so build-time dependencies like mini_portile2 survive.
 
   test_ruby_only_nokogiri_keeps_build_deps =
     let
       # Lockfile has only the ruby variant of nokogiri (no arm64-darwin etc.)
-      gems = [
+      allGems = [
         (mkGem {
           gemName = "nokogiri";
           platform = "ruby";
@@ -566,10 +626,29 @@ let
           groups = [ "default" ];
         })
       ];
+      depGraph = {
+        nokogiri = [
+          "mini_portile2"
+          "racc"
+        ];
+        racc = [ ];
+        mini_portile2 = [ ];
+      };
       requestedGroups = [ "default" ];
       platforms = platformsForSystem "aarch64-darwin";
-      afterGroup = builtins.filter (filterGroup requestedGroups) gems;
-      afterPlatform = builtins.filter (filterPlatform platforms) afterGroup;
+
+      # Step 1: filter by groups
+      afterGroup = builtins.filter (filterGroup requestedGroups) allGems;
+      afterGroupNames = map (g: g.gemName) afterGroup;
+
+      # Step 2: expand transitive deps to recover filtered-out build deps
+      expandedNames = expandTransitiveDeps depGraph afterGroupNames;
+
+      # Step 3: select gems whose names are in the expanded set from the full list
+      expandedGems = builtins.filter (g: builtins.elem g.gemName expandedNames) allGems;
+
+      # Step 4: filter by platform and resolve
+      afterPlatform = builtins.filter (filterPlatform platforms) expandedGems;
       resolved = resolvePlatforms platforms afterPlatform;
       names = builtins.attrNames resolved;
     in
@@ -580,6 +659,74 @@ let
       assertEq "ruby-only nokogiri: mini_portile2 included for build"
         (builtins.elem "mini_portile2" names)
         true;
+
+  # ── error message prefixes (Phase 4) ─────────────────────────
+
+  test_platformsForSystem_error_lists_supported = assertThrows "platformsForSystem: unsupported system throws with gems4nix prefix and supported list" (
+    platformsForSystem "riscv64-linux"
+  );
+
+  test_platformsForSystem_error_mips = assertThrows "platformsForSystem: mips throws with clear message" (
+    platformsForSystem "mips-linux"
+  );
+
+  # ── warnIfNoPlatformGems ────────────────────────────────────
+
+  test_warnIfNoPlatformGems_no_native =
+    let
+      gems = [
+        (mkGem {
+          gemName = "rake";
+          platform = "ruby";
+        })
+        (mkGem {
+          gemName = "nokogiri";
+          platform = "ruby";
+        })
+      ];
+      platforms = [
+        "ruby"
+        "arm64-darwin"
+        "universal-darwin"
+      ];
+      # warnIfNoPlatformGems should pass through platforms unchanged (warning is a side effect)
+      result = filterHelpers.warnIfNoPlatformGems gems platforms;
+    in
+    assertEq "warnIfNoPlatformGems: returns platforms unchanged when warning fires" result platforms;
+
+  test_warnIfNoPlatformGems_has_native =
+    let
+      gems = [
+        (mkGem {
+          gemName = "rake";
+          platform = "ruby";
+        })
+        (mkGem {
+          gemName = "nokogiri";
+          platform = "arm64-darwin";
+        })
+      ];
+      platforms = [
+        "ruby"
+        "arm64-darwin"
+        "universal-darwin"
+      ];
+      result = filterHelpers.warnIfNoPlatformGems gems platforms;
+    in
+    assertEq "warnIfNoPlatformGems: returns platforms when native gems present" result platforms;
+
+  test_warnIfNoPlatformGems_ruby_only_platforms =
+    let
+      gems = [
+        (mkGem {
+          gemName = "rake";
+          platform = "ruby";
+        })
+      ];
+      platforms = [ "ruby" ];
+      result = filterHelpers.warnIfNoPlatformGems gems platforms;
+    in
+    assertEq "warnIfNoPlatformGems: no warning when only ruby platforms requested" result platforms;
 
   # ── all tests ────────────────────────────────────────────────
 
@@ -625,8 +772,22 @@ let
     && test_platformsForSystem_x86_64_linux
     && test_platformsForSystem_unknown_throws
     && test_platformsForSystem_filter_integration
-    # regression: ruby-only nokogiri must keep build deps
-    && test_ruby_only_nokogiri_keeps_build_deps;
+    # expandTransitiveDeps
+    && test_expandTransitiveDeps_basic
+    && test_expandTransitiveDeps_transitive_chain
+    && test_expandTransitiveDeps_no_deps
+    && test_expandTransitiveDeps_circular
+    && test_expandTransitiveDeps_unknown_dep_not_added
+    && test_expandTransitiveDeps_empty_initial
+    # regression: ruby-only nokogiri keeps build deps (was quarantined)
+    && test_ruby_only_nokogiri_keeps_build_deps
+    # error message prefixes (Phase 4)
+    && test_platformsForSystem_error_lists_supported
+    && test_platformsForSystem_error_mips
+    # warnIfNoPlatformGems
+    && test_warnIfNoPlatformGems_no_native
+    && test_warnIfNoPlatformGems_has_native
+    && test_warnIfNoPlatformGems_ruby_only_platforms;
 
 in
 allTests

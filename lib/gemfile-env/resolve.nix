@@ -19,6 +19,29 @@
     gemConfig: attrs:
     if gemConfig ? ${attrs.gemName} then attrs // gemConfig.${attrs.gemName} attrs else attrs;
 
+  # Expand a set of gem names to include all transitive dependencies.
+  # depGraph: { gemName = [ "dep1" "dep2" ... ]; ... } from parseDependencies
+  # initialNames: list of gem names that survived group+platform filtering
+  # Returns: expanded list of gem names including all transitive deps.
+  # Uses a convergent fixpoint: iterates until no new deps are added.
+  expandTransitiveDeps =
+    depGraph: initialNames:
+    let
+      step =
+        names:
+        let
+          newDeps = lib.unique (lib.flatten (map (n: depGraph.${n} or [ ]) names));
+        in
+        lib.unique (names ++ newDeps);
+      converge =
+        prev:
+        let
+          next = step prev;
+        in
+        if next == prev then prev else converge next;
+    in
+    converge initialNames;
+
   # Map a nixpkgs system string to the Ruby platform strings that should be
   # accepted from a Gemfile.lock. Always includes "ruby" (pure-Ruby gems).
   #
@@ -56,7 +79,31 @@
     if mapping ? ${system} then
       mapping.${system}
     else
-      throw "platformsForSystem: unsupported system '${system}'. Pass an explicit `platforms` list or extend platformsForSystem.";
+      throw "gems4nix: unsupported system '${system}'. Supported: aarch64-darwin, x86_64-darwin, aarch64-linux, x86_64-linux. Or pass an explicit `platforms` list.";
+
+  # Check whether a lockfile has precompiled native gem variants.
+  # If the target platforms include non-ruby platforms but NO gem in the
+  # parsed lockfile has a non-ruby platform, emit a lib.warn advising the
+  # user to add platform variants to their lockfile.
+  #
+  # gems: flat list of gem attrsets (the full parsed lockfile, before filtering)
+  # platforms: resolved platform list (from platformsForSystem or user)
+  # Returns: platforms (pass-through), but with a warning attached if needed.
+  warnIfNoPlatformGems =
+    gems: platforms:
+    let
+      wantNative = builtins.any (p: p != "ruby") platforms;
+      hasNative = builtins.any (g: g.platform != "ruby") gems;
+      platformsStr = lib.concatStringsSep " " (builtins.filter (p: p != "ruby") platforms);
+    in
+    if wantNative && !hasNative then
+      lib.warn ''
+        gems4nix: Your Gemfile.lock contains no precompiled native gem variants.
+        All native gems will be compiled from source, which may be slow or fail.
+        To add precompiled variants, run:
+          bundle lock --add-platform ${platformsStr}'' platforms
+    else
+      platforms;
 
   # Given a preference-ordered platform list and a list of gems (possibly
   # containing duplicates for different platforms), resolve to one gem per
