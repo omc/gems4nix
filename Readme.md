@@ -110,6 +110,22 @@ gemfileEnv {
 };
 ```
 
+**"gems4nix: Gemfile uses the `gemspec` directive but no gemspec was supplied"**
+Your Gemfile calls `gemspec` (the default `bundle gem` layout). Group inference
+runs Bundler against a sandboxed Gemfile, so the `.gemspec` — and anything it
+`require_relative`s — must be handed to `gemfileEnv` explicitly:
+```nix
+gemfileEnv {
+  # ...
+  gemspec    = ./my-gem.gemspec;
+  extraFiles = {
+    "lib/my_gem/version.rb" = ./lib/my_gem/version.rb;
+  };
+};
+```
+Alternatively, pass an explicit `gemGroups = { name = [ "default" ]; ... }`
+mapping to skip Bundler group inference entirely.
+
 ## How It Works
 
 The pipeline has three stages:

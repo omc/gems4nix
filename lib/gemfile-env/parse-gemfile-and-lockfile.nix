@@ -29,6 +29,7 @@
   runCommand,
   ruby,
   bundler,
+  git,
   fetchurl,
   stdenv,
   defaultGemConfig,
@@ -42,6 +43,8 @@
   gemfile,
   gemfileLock,
   gemGroups ? null, # null = auto-detect via gem-groups.rb; attrset = override
+  gemspec ? null, # path to *.gemspec when the Gemfile uses the `gemspec` directive
+  extraFiles ? { }, # { "relative/dest" = ./src; } — files the gemspec require_relatives
 }:
 
 let
@@ -56,21 +59,69 @@ let
 
   # ── IO ───────────────────────────────────────────────────────
 
+  # Detect the Bundler `gemspec` directive in the Gemfile. When present, the
+  # group-detection IFD sandbox must include the gemspec (and anything it
+  # require_relatives) or Bundler aborts with `Bundler::InvalidOption: There
+  # are no gemspecs`. See github.com/omc/gems4nix issue #2.
+  gemfileText = builtins.readFile gemfile;
+  gemfileUsesGemspec =
+    let
+      isGemspecLine = line: builtins.match "[[:space:]]*gemspec([[:space:]#(].*)?" line != null;
+    in
+    lib.any isGemspecLine (lib.splitString "\n" gemfileText);
+
+  needsGemspecButMissing = gemfileUsesGemspec && gemspec == null && gemGroups == null;
+
+  gemspecError = throw ''
+    gems4nix: Gemfile uses the `gemspec` directive but no gemspec was supplied.
+
+    Bundler needs the .gemspec (and any files it require_relatives) available
+    at group-detection time. Add these arguments to your gemfileEnv call:
+
+        gemspec    = ./<your-name>.gemspec;
+        extraFiles = { "lib/<your-name>/version.rb" = ./lib/<your-name>/version.rb; };
+
+    Alternatively, pass an explicit `gemGroups = { ... }` mapping to skip
+    Bundler group inference entirely.
+  '';
+
+  # Copy the caller-supplied gemspec into the sandbox as `project.gemspec`.
+  # The filename doesn't matter to Bundler — it globs `*.gemspec` — but the
+  # gemspec's require_relative calls resolve from the sandbox root, so
+  # extraFiles must land at their declared destinations.
+  copyGemspecCmd = lib.optionalString (gemspec != null) ''
+    cp ${gemspec} project.gemspec
+  '';
+
+  copyExtraFilesCmd = lib.concatMapStringsSep "\n" (dest: ''
+    mkdir -p "$(dirname ${lib.escapeShellArg dest})"
+    cp ${extraFiles.${dest}} ${lib.escapeShellArg dest}
+  '') (builtins.attrNames extraFiles);
+
   # use the Gemfile to produce group information for each gem
   # (skipped when the caller supplies an explicit gemGroups override)
   gemGroupsJson =
-    runCommand "gem-groups-json"
-      {
-        buildInputs = [
-          ruby
-          bundler
-        ];
-      }
-      ''
-        cp ${gemfile} Gemfile
-        cp ${gemfileLock} Gemfile.lock
-        ruby ${./gem-groups.rb} > $out
-      '';
+    if needsGemspecButMissing then
+      gemspecError
+    else
+      runCommand "gem-groups-json"
+        {
+          # git is needed because the canonical `bundle gem` gemspec computes
+          # spec.files via `IO.popen(%w[git ls-files -z])`. Without git on PATH
+          # that popen raises Errno::ENOENT and gemspec evaluation aborts.
+          buildInputs = [
+            ruby
+            bundler
+            git
+          ];
+        }
+        ''
+          cp ${gemfile} Gemfile
+          cp ${gemfileLock} Gemfile.lock
+          ${copyGemspecCmd}
+          ${copyExtraFilesCmd}
+          ruby ${./gem-groups.rb} > $out
+        '';
 
   # ── pure assembly (delegated to helpers) ─────────────────────
 

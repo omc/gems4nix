@@ -30,6 +30,8 @@ in
     "test"
   ],
   gemGroups ? null, # null = auto-detect via gem-groups.rb IFD; attrset = override
+  gemspec ? null, # path to *.gemspec when the Gemfile uses the `gemspec` directive
+  extraFiles ? { }, # { "relative/dest" = ./src; } — files the gemspec require_relatives
   gemConfig ? defaultGemConfig,
   ruby ? defaultRuby,
   debug ? false, # when true, builtins.trace each gem being built
@@ -39,7 +41,15 @@ let
 
   # ── parsing ──────────────────────────────────────────────────
   parseGemfileAndLockfile = callPackage ./parse-gemfile-and-lockfile.nix { };
-  parsed = parseGemfileAndLockfile { inherit gemfile gemfileLock gemGroups; };
+  parsed = parseGemfileAndLockfile {
+    inherit
+      gemfile
+      gemfileLock
+      gemGroups
+      gemspec
+      extraFiles
+      ;
+  };
   gemMetadata = parsed.gems;
   depGraph = parsed.depGraph;
 

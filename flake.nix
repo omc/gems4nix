@@ -2,7 +2,7 @@
   description = "Bundle Ruby gems into an environment, using Bundler checksums";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs?ref=24.11";
+    nixpkgs.url = "github:NixOS/nixpkgs?ref=26.05";
   };
 
   outputs =
@@ -58,6 +58,17 @@
             gemfileLock = ./test/integration/platform-gems/Gemfile.lock;
             groups = [ "default" ];
           };
+
+          gemspecDirectiveGems = gemfileEnv {
+            name = "gemspec-directive-test";
+            gemfile = ./test/integration/gemspec-directive/Gemfile;
+            gemfileLock = ./test/integration/gemspec-directive/Gemfile.lock;
+            gemspec = ./test/integration/gemspec-directive/foo.gemspec;
+            extraFiles = {
+              "lib/foo/version.rb" = ./test/integration/gemspec-directive/lib/foo/version.rb;
+            };
+            groups = [ "default" ];
+          };
         in
         {
           unit-resolve = nixEvalCheck "resolve" ./test/unit/test-resolve-logic.nix;
@@ -74,6 +85,19 @@
               }
               ''
                 ruby ${./test/integration/platform-gems/validate.rb}
+                touch $out
+              '';
+
+          integration-gemspec-directive =
+            pkgs.runCommand "integration-gemspec-directive"
+              {
+                buildInputs = [
+                  pkgs.ruby
+                  gemspecDirectiveGems
+                ];
+              }
+              ''
+                ruby ${./test/integration/gemspec-directive/validate.rb}
                 touch $out
               '';
         }
