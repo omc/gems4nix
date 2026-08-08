@@ -89,7 +89,10 @@ bundle lock --add-platform arm64-darwin  # (or your platform)
 The gem is on a private registry and the build has no credential for it. Declare one with the `credentials` argument. Note that `netrc-file` in `nix.conf` cannot fix this: it configures Nix's own downloader, not the `curl` a derivation runs. See [Private Gem Registries](#private-gem-registries).
 
 **"gems4nix: no credential available for &lt;host&gt;"**
-You declared a credential for that host but the variable it names is empty inside the build. On multi-user Nix the value has to be on the daemon's environment, not your shell. See [Supplying the values](#supplying-the-values).
+You declared `usernameVar`/`passwordVar` for that host but the variable is empty inside the build. On multi-user Nix the value has to be on the daemon's environment, not your shell. See [Mode 2: from the build environment](#mode-2-from-the-build-environment).
+
+**"gems4nix: cannot read the netrc for &lt;host&gt; at &lt;path&gt;"**
+You declared a `netrcFile` the build user cannot read. Absent and unreadable look identical from inside the build, so check both: every directory on the path must be traversable by the build user, and on Linux the path must be in `extra-sandbox-paths`. See [Mode 1: from a file you control](#mode-1-from-a-file-you-control).
 
 **"gems4nix: unsupported system '...'"**
 The automatic platform detection does not recognize your
@@ -184,7 +187,7 @@ gems4nix narrows this down in three steps, matching what `bundle install` does:
 | `platforms` | auto-detected from `stdenv` | List of Bundler platform strings |
 | `gemGroups` | auto-detected via `gem-groups.rb` | Attrset of `{ gemName = [ "group1" ... ]; }` to override group detection |
 | `gemConfig` | `nixpkgs.defaultGemConfig` | Per-gem build overrides |
-| `credentials` | `{}` | Credentials for private gem registries, keyed by remote host |
+| `credentials` | `{}` | Private registry credentials keyed by remote host; each entry is `{ netrcFile }` or `{ usernameVar, passwordVar }` |
 | `ruby` | `nixpkgs.ruby` | Ruby derivation to build against |
 
 ### Group filtering example
@@ -203,53 +206,93 @@ pass `gemGroups` explicitly.
 
 ## Private Gem Registries
 
-A gem hosted on a private registry needs a credential inside the Nix build sandbox. Declare one per remote host, naming the environment variables the credential is read from:
-
-```nix
-gemfileEnv {
-  name = "app-gems";
-  gemfile = ./Gemfile;
-  gemfileLock = ./Gemfile.lock;
-
-  credentials."rubygems.pkg.github.com" = {
-    usernameVar = "GEM_REGISTRY_USER";
-    passwordVar = "GEM_REGISTRY_TOKEN";
-  };
-};
-```
+A gem hosted on a private registry needs a credential inside the Nix build sandbox. Declare one per remote host. gems4nix does not care where the secret comes from, because the two available answers fail on different machines, so pick the one that fits yours.
 
 The key is a bare host, matched against the remote each gem is fetched from. Gems on remotes you did not name are fetched unauthenticated, exactly as before. If you name a host no gem uses, gems4nix warns. That is almost always a typo.
 
-The values are never written to the Nix store. gems4nix declares the two variables in the fetch derivation's `impureEnvVars` and writes a netrc into the build directory, which is discarded with the build.
+Either way the secret stays out of the Nix store: gems4nix writes a netrc into the build directory, which is discarded with the build.
 
-### Supplying the values
-
-`impureEnvVars` are read from the environment of the process that runs the build. On multi-user Nix that process is `nix-daemon`, not your shell, so `export GEM_REGISTRY_TOKEN=…` before `nix build` has no effect. The variables have to be set on the daemon's job:
+### Mode 1: from a file you control
 
 ```nix
-# nix-darwin or NixOS
-nix.envVars = {
-  GEM_REGISTRY_USER = "your-username";
-  GEM_REGISTRY_TOKEN = "ghp_…";
+credentials."rubygems.pkg.github.com".netrcFile = "/run/secrets/gem-registry-netrc";
+```
+
+The file is an ordinary netrc:
+
+```
+machine rubygems.pkg.github.com login your-username password ghp_…
+```
+
+`netrcFile` must be a **string**, not a Nix path literal. A path literal would copy the file into the store; a string is read at build time and never copied. gems4nix rejects a path literal rather than letting it through.
+
+Two requirements, both of which produce a named error rather than a 401 if unmet:
+
+- **The build user must be able to read it.** The build does not run as you. Under a multi-user daemon it runs as a build user sharing no group with you, so a secret under a `0750` home directory is unreachable no matter its own mode. Grant it to the build group instead of the world.
+- **On Linux, the sandbox must expose it.** `extra-sandbox-paths = /run/secrets/gem-registry-netrc`. Darwin defaults to `sandbox = false`, so ordinary Unix permissions are the only gate there.
+
+This mode needs no daemon configuration at all.
+
+### Mode 2: from the build environment
+
+```nix
+credentials."rubygems.pkg.github.com" = {
+  usernameVar = "GEM_REGISTRY_USER";
+  passwordVar = "GEM_REGISTRY_TOKEN";
 };
 ```
 
-Restart `nix-daemon` afterward. On single-user Nix the build runs as you, so exporting the variables in the invoking shell is enough.
+gems4nix names both variables in the fetch derivation's `impureEnvVars`. Nix reads those from the environment of the process that runs the build, which on multi-user Nix is `nix-daemon`, not your shell: `export GEM_REGISTRY_TOKEN=…` before `nix build` has no effect. The variables have to be on the daemon's job, and it needs a restart to pick them up. On single-user Nix the build runs as you, so exporting them in the invoking shell is enough.
 
-Putting a token in `nix.envVars` writes it into your system configuration and into the daemon's environment. Read it from a secret manager rather than committing it if that matters to you.
+This mode needs no readable file anywhere, which is its advantage. Its cost is that populating the daemon's environment is machine-level configuration nothing in your project can express.
 
-### Why not a netrc file
+**Do not set the value directly in `nix.envVars`.** That option is the obvious-looking route and it is the wrong one: NixOS and nix-darwin render the value into the generated unit or plist, which lands in the Nix store at mode `0444`. The token becomes readable by every local user and every process, permanently. Feed the daemon's environment from a file instead — see below.
 
-The workaround people usually arrive at is a netrc on disk plus `NIX_CURL_FLAGS=--netrc-file /etc/nix/netrc` on the daemon. It works, and it has a cost that is easy to miss: with `sandbox = false` (the default on darwin) the build runs as `_nixbld`, which shares no group with you and cannot traverse a `0750` home directory. The file has to live somewhere world-readable, typically `/etc/nix/netrc` at mode `0644`. Every local user can then read the registry token.
+### Using a secret manager
 
-| | `NIX_CURL_FLAGS` + netrc file | `credentials` (`netrcPhase`) |
-| -- | -- | -- |
-| needs the daemon environment | no | yes |
-| needs a world-readable secret on disk | **yes** | no |
-| declared in the derivation | no | yes |
-| secret in the store | no | no |
+Both modes work with [sops-nix](https://github.com/Mic92/sops-nix), which decrypts secrets at activation into `/run/secrets` rather than into the store.
 
-Both approaches keep the secret out of the store. Only `credentials` keeps it off a world-readable path, and only `credentials` states the requirement where the fetch happens instead of in machine-level daemon configuration nothing in your project mentions.
+For **mode 1**, decrypt the netrc and make it readable by the build group. Nix builds run as `_nixbld*` in group `nixbld`, so `0440` with that group keeps the file off world-readable paths:
+
+```nix
+sops.secrets."gem-registry-netrc" = {
+  sopsFile = ./secrets/gem-registry-netrc;
+  format = "binary";
+  group = "nixbld";
+  mode = "0440";
+};
+```
+
+Then point gems4nix at `config.sops.secrets."gem-registry-netrc".path`, and on Linux add that path to `nix.settings.extra-sandbox-paths`.
+
+For **mode 2** on NixOS, render an environment file and hand it to the daemon unit, so the value reaches the daemon's environment without ever being written to the store:
+
+```nix
+sops.templates."nix-gem-registry.env".content = ''
+  GEM_REGISTRY_USER=${config.sops.placeholder."gem-registry-user"}
+  GEM_REGISTRY_TOKEN=${config.sops.placeholder."gem-registry-token"}
+'';
+
+systemd.services.nix-daemon.serviceConfig.EnvironmentFile =
+  config.sops.templates."nix-gem-registry.env".path;
+```
+
+There is no launchd equivalent of `EnvironmentFile`, so mode 2 on darwin means wrapping the daemon's `ProgramArguments` to source the file before `exec`ing `nix-daemon`. Mode 1 is the simpler fit on darwin.
+
+### Why not `NIX_CURL_FLAGS`
+
+The workaround people usually arrive at is a netrc on disk plus `NIX_CURL_FLAGS=--netrc-file /etc/nix/netrc` on the daemon. It works. Its cost is easy to miss: `NIX_CURL_FLAGS` has to be set on the daemon *and* the file has to be readable by the build user, and because the flag is set machine-wide rather than per fetch, the file it names is conventionally `/etc/nix/netrc` at mode `0644`. Every local user can then read the registry token.
+
+| | `NIX_CURL_FLAGS` + netrc | `netrcFile` | `usernameVar` / `passwordVar` |
+| -- | -- | -- | -- |
+| needs the daemon environment | yes | **no** | yes |
+| needs a readable secret on disk | yes | yes | **no** |
+| can be scoped to the build group | in principle | **yes** | n/a |
+| declared in the derivation | no | **yes** | **yes** |
+| secret in the store | no | no | no |
+| scoped to the hosts that need it | no | **yes** | **yes** |
+
+All three keep the secret out of the store. What `credentials` adds is that the requirement is stated where the fetch happens, scoped to the hosts that need it, and reported by name when it is missing.
 
 ### `netrc-file` in `nix.conf` does not apply
 

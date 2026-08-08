@@ -12,6 +12,7 @@ let
   credentials = import ../../lib/gemfile-env/credentials.nix { inherit lib; };
   inherit (credentials)
     hostOf
+    credentialMode
     validateCredentials
     credentialFor
     gemSuffix
@@ -25,6 +26,12 @@ let
       usernameVar = "GEM_REGISTRY_USER";
       passwordVar = "GEM_REGISTRY_TOKEN";
     };
+  };
+
+  # A string, not a Nix path: the file is read at build time and never copied
+  # into the store. This is the shape a secret manager produces.
+  fileCreds = {
+    "rubygems.pkg.github.com".netrcFile = "/run/secrets/gem-registry-netrc";
   };
 
   privateGem = {
@@ -112,9 +119,88 @@ let
         "gems.example.com" = {
           usernameVar = "USER";
           passwordVar = "TOKEN";
-          netrcFile = "/etc/netrc";
+          tokenFile = "/etc/netrc";
         };
       });
+
+  test_validateCredentials_empty_entry =
+    assertThrows "an entry declaring nothing throws"
+      (validateCredentials {
+        "gems.example.com" = { };
+      });
+
+  # ── validateCredentials: netrcFile mode ────────────────────────
+
+  test_validateCredentials_netrcFile_ok =
+    assertEq "a netrcFile entry passes through" (validateCredentials fileCreds)
+      fileCreds;
+
+  # Error should say to pick one mode.
+  test_validateCredentials_mixed_modes =
+    assertThrows "mixing netrcFile with usernameVar throws"
+      (validateCredentials {
+        "gems.example.com" = {
+          netrcFile = "/run/secrets/netrc";
+          usernameVar = "USER";
+        };
+      });
+
+  # A Nix path literal would be copied into the store; a string is not.
+  test_validateCredentials_netrcFile_path_literal =
+    assertThrows "a Nix path as netrcFile throws"
+      (validateCredentials {
+        "gems.example.com".netrcFile = ./test-credentials-logic.nix;
+      });
+
+  test_validateCredentials_netrcFile_relative =
+    assertThrows "a relative netrcFile throws"
+      (validateCredentials {
+        "gems.example.com".netrcFile = "secrets/netrc";
+      });
+
+  # ── credentialMode ─────────────────────────────────────────────
+
+  test_credentialMode_env = assertEq "usernameVar/passwordVar is env mode" (credentialMode
+    githubCreds."rubygems.pkg.github.com"
+  ) "env";
+
+  test_credentialMode_file = assertEq "netrcFile is file mode" (credentialMode
+    fileCreds."rubygems.pkg.github.com"
+  ) "file";
+
+  # ── netrcFetchAttrs: netrcFile mode ────────────────────────────
+
+  test_netrcFile_no_impure_env_vars =
+    let
+      attrs = netrcFetchAttrs (credentialFor fileCreds privateGem);
+    in
+    assertEq "file mode declares no impure environment variables" (attrs ? netrcImpureEnvVars) false;
+
+  test_netrcFile_copies_the_file =
+    let
+      attrs = netrcFetchAttrs (credentialFor fileCreds privateGem);
+    in
+    assertEq "file mode copies the netrc into the build directory"
+      (lib.strings.hasInfix "cp \"/run/secrets/gem-registry-netrc\" netrc" attrs.netrcPhase)
+      true;
+
+  # The permission trap from the issue: an unreadable path is indistinguishable
+  # from a missing one, so the error has to name both causes.
+  test_netrcFile_error_names_traversal =
+    let
+      attrs = netrcFetchAttrs (credentialFor fileCreds privateGem);
+    in
+    assertEq "the unreadable-netrc error explains the traversal trap"
+      (lib.strings.hasInfix "traverse" attrs.netrcPhase)
+      true;
+
+  test_netrcFile_error_names_sandbox_paths =
+    let
+      attrs = netrcFetchAttrs (credentialFor fileCreds privateGem);
+    in
+    assertEq "the unreadable-netrc error names extra-sandbox-paths"
+      (lib.strings.hasInfix "extra-sandbox-paths = /run/secrets/gem-registry-netrc" attrs.netrcPhase)
+      true;
 
   # ── credentialFor ──────────────────────────────────────────────
 
@@ -209,6 +295,20 @@ let
     && test_validateCredentials_missing_username
     && test_validateCredentials_url_key
     && test_validateCredentials_unknown_attr
+    && test_validateCredentials_empty_entry
+    # validateCredentials: netrcFile mode
+    && test_validateCredentials_netrcFile_ok
+    && test_validateCredentials_mixed_modes
+    && test_validateCredentials_netrcFile_path_literal
+    && test_validateCredentials_netrcFile_relative
+    # credentialMode
+    && test_credentialMode_env
+    && test_credentialMode_file
+    # netrcFetchAttrs: netrcFile mode
+    && test_netrcFile_no_impure_env_vars
+    && test_netrcFile_copies_the_file
+    && test_netrcFile_error_names_traversal
+    && test_netrcFile_error_names_sandbox_paths
     # credentialFor
     && test_credentialFor_match
     && test_credentialFor_no_match

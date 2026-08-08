@@ -33,6 +33,10 @@ let
     };
   };
 
+  fileAuthenticated = mkEnv {
+    "rubygems.org".netrcFile = "/run/secrets/gem-registry-netrc";
+  };
+
   urlsOf = env: pkgs.lib.concatMap (gem: gem.src.urls) env.paths;
 
   test_urls_match_buildRubyGem =
@@ -64,8 +68,34 @@ let
       ) authenticated.paths)
       true;
 
+  test_file_mode_urls_match_buildRubyGem =
+    assertEq "netrcFile gems fetch the same URLs buildRubyGem would" (urlsOf fileAuthenticated)
+      (urlsOf plain);
+
+  # The path is a string, so nothing about it is copied into the store. If it
+  # were a Nix path literal the netrcPhase would name a /nix/store entry.
+  test_file_mode_path_not_in_store =
+    assertEq "netrcFile reaches the builder as a path, not a store copy"
+      (pkgs.lib.all (
+        gem:
+        pkgs.lib.strings.hasInfix "/run/secrets/gem-registry-netrc" gem.src.drvAttrs.netrcPhase
+        && !(pkgs.lib.strings.hasInfix "/nix/store" gem.src.drvAttrs.netrcPhase)
+      ) fileAuthenticated.paths)
+      true;
+
+  # File mode needs no impure environment variable, which is the whole reason
+  # it exists: it works without touching the daemon's environment.
+  test_file_mode_adds_no_impure_vars = assertEq "netrcFile adds no impure environment variables" (
+    pkgs.lib.concatMap
+    (gem: gem.src.drvAttrs.impureEnvVars)
+    fileAuthenticated.paths
+  ) (pkgs.lib.concatMap (gem: gem.src.drvAttrs.impureEnvVars) plain.paths);
+
 in
 test_urls_match_buildRubyGem
 && test_credential_vars_are_impure
 && test_no_credentials_no_netrc
 && test_secret_not_in_derivation
+&& test_file_mode_urls_match_buildRubyGem
+&& test_file_mode_path_not_in_store
+&& test_file_mode_adds_no_impure_vars

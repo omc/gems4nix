@@ -22,12 +22,16 @@ flowchart TD
    should not need source build patches).
 4. Delegate to nixpkgs' `buildRubyGem` and `defaultGemConfig` rather than
    maintaining custom builders.
-5. Private-registry credentials travel as impure environment variables, not as
-   a file. `buildRubyGem` builds its `src` from `source.remotes` and
+5. Private-registry credentials go through `fetchurl`'s `netrcPhase`, so the
+   secret reaches curl through a netrc in the build directory and never through
+   the store. `buildRubyGem` builds its `src` from `source.remotes` and
    `source.sha256` alone, so a gem on a credentialed remote gets a `src` we
-   construct instead, carrying `netrcPhase` and `netrcImpureEnvVars`. The
-   secret reaches curl through a netrc in the build directory and never
-   through the store or a world-readable path.
+   construct instead.
+6. Stay unopinionated about where that secret comes from. A consumer names
+   either a file path (`netrcFile`, needing no daemon configuration) or two
+   environment variables (needing no readable file). Both fail on different
+   machines, so the choice belongs to the consumer, and each mode reports its
+   own failure mode by name.
 
 ## What We Use from Nixpkgs
 
