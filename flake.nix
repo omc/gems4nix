@@ -74,6 +74,7 @@
           unit-resolve = nixEvalCheck "resolve" ./test/unit/test-resolve-logic.nix;
           unit-parse = nixEvalCheck "parse" ./test/unit/test-parse-logic.nix;
           unit-pipeline = nixEvalCheck "pipeline" ./test/unit/test-pipeline-logic.nix;
+          unit-credentials = nixEvalCheck "credentials" ./test/unit/test-credentials-logic.nix;
 
           integration-platform-gems =
             pkgs.runCommand "integration-platform-gems"
