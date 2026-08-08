@@ -85,6 +85,12 @@ Add platform entries so the precompiled variant is used instead:
 bundle lock --add-platform arm64-darwin  # (or your platform)
 ```
 
+**"curl: (22) The requested URL returned error: 401"**
+The gem is on a private registry and the build has no credential for it. Declare one with the `credentials` argument. Note that `netrc-file` in `nix.conf` cannot fix this: it configures Nix's own downloader, not the `curl` a derivation runs. See [Private Gem Registries](#private-gem-registries).
+
+**"gems4nix: no credential available for &lt;host&gt;"**
+You declared a credential for that host but the variable it names is empty inside the build. On multi-user Nix the value has to be on the daemon's environment, not your shell. See [Supplying the values](#supplying-the-values).
+
 **"gems4nix: unsupported system '...'"**
 The automatic platform detection does not recognize your
 `stdenv.hostPlatform.system`. Pass an explicit `platforms` list:
@@ -178,6 +184,7 @@ gems4nix narrows this down in three steps, matching what `bundle install` does:
 | `platforms` | auto-detected from `stdenv` | List of Bundler platform strings |
 | `gemGroups` | auto-detected via `gem-groups.rb` | Attrset of `{ gemName = [ "group1" ... ]; }` to override group detection |
 | `gemConfig` | `nixpkgs.defaultGemConfig` | Per-gem build overrides |
+| `credentials` | `{}` | Credentials for private gem registries, keyed by remote host |
 | `ruby` | `nixpkgs.ruby` | Ruby derivation to build against |
 
 ### Group filtering example
@@ -193,6 +200,60 @@ gemfileEnv {
 
 Group extraction uses a Ruby IFD (`gem-groups.rb`) by default. To avoid IFD,
 pass `gemGroups` explicitly.
+
+## Private Gem Registries
+
+A gem hosted on a private registry needs a credential inside the Nix build sandbox. Declare one per remote host, naming the environment variables the credential is read from:
+
+```nix
+gemfileEnv {
+  name = "app-gems";
+  gemfile = ./Gemfile;
+  gemfileLock = ./Gemfile.lock;
+
+  credentials."rubygems.pkg.github.com" = {
+    usernameVar = "GEM_REGISTRY_USER";
+    passwordVar = "GEM_REGISTRY_TOKEN";
+  };
+};
+```
+
+The key is a bare host, matched against the remote each gem is fetched from. Gems on remotes you did not name are fetched unauthenticated, exactly as before. If you name a host no gem uses, gems4nix warns. That is almost always a typo.
+
+The values are never written to the Nix store. gems4nix declares the two variables in the fetch derivation's `impureEnvVars` and writes a netrc into the build directory, which is discarded with the build.
+
+### Supplying the values
+
+`impureEnvVars` are read from the environment of the process that runs the build. On multi-user Nix that process is `nix-daemon`, not your shell, so `export GEM_REGISTRY_TOKEN=…` before `nix build` has no effect. The variables have to be set on the daemon's job:
+
+```nix
+# nix-darwin or NixOS
+nix.envVars = {
+  GEM_REGISTRY_USER = "your-username";
+  GEM_REGISTRY_TOKEN = "ghp_…";
+};
+```
+
+Restart `nix-daemon` afterward. On single-user Nix the build runs as you, so exporting the variables in the invoking shell is enough.
+
+Putting a token in `nix.envVars` writes it into your system configuration and into the daemon's environment. Read it from a secret manager rather than committing it if that matters to you.
+
+### Why not a netrc file
+
+The workaround people usually arrive at is a netrc on disk plus `NIX_CURL_FLAGS=--netrc-file /etc/nix/netrc` on the daemon. It works, and it has a cost that is easy to miss: with `sandbox = false` (the default on darwin) the build runs as `_nixbld`, which shares no group with you and cannot traverse a `0750` home directory. The file has to live somewhere world-readable, typically `/etc/nix/netrc` at mode `0644`. Every local user can then read the registry token.
+
+| | `NIX_CURL_FLAGS` + netrc file | `credentials` (`netrcPhase`) |
+| -- | -- | -- |
+| needs the daemon environment | no | yes |
+| needs a world-readable secret on disk | **yes** | no |
+| declared in the derivation | no | yes |
+| secret in the store | no | no |
+
+Both approaches keep the secret out of the store. Only `credentials` keeps it off a world-readable path, and only `credentials` states the requirement where the fetch happens instead of in machine-level daemon configuration nothing in your project mentions.
+
+### `netrc-file` in `nix.conf` does not apply
+
+`netrc-file` configures Nix's own downloader: substituters, flake inputs, `builtins.fetchurl`. A derivation that runs its own `curl` never consults it. This is why a private `github:` flake input resolves on a machine where a gem fetch still returns 401. Being in `trusted-users` does not help either; that governs which settings a client may send to the daemon.
 
 ## Contributing
 
