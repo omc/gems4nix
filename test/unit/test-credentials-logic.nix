@@ -35,13 +35,13 @@ let
   };
 
   privateGem = {
-    gemName = "depot";
+    gemName = "private-gem";
     version = "1.6.0";
     platform = "ruby";
     groups = [ "default" ];
     source = {
       sha256 = "deadbeef";
-      remotes = [ "https://rubygems.pkg.github.com/omc/gems" ];
+      remotes = [ "https://rubygems.pkg.github.com/example-org/gems" ];
       type = "gem";
     };
   };
@@ -61,7 +61,7 @@ let
   # ── hostOf ─────────────────────────────────────────────────────
 
   test_hostOf_https =
-    assertEq "hostOf strips scheme and path" (hostOf "https://rubygems.pkg.github.com/omc/gems")
+    assertEq "hostOf strips scheme and path" (hostOf "https://rubygems.pkg.github.com/example-org/gems")
       "rubygems.pkg.github.com";
 
   test_hostOf_bare =
@@ -241,7 +241,7 @@ let
   # ── gemUrls ────────────────────────────────────────────────────
 
   test_gemUrls = assertEq "gemUrls mirrors buildRubyGem's URL construction" (gemUrls privateGem) [
-    "https://rubygems.pkg.github.com/omc/gems/gems/depot-1.6.0.gem"
+    "https://rubygems.pkg.github.com/example-org/gems/gems/private-gem-1.6.0.gem"
   ];
 
   # ── netrcFetchAttrs ────────────────────────────────────────────
