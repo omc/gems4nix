@@ -33,6 +33,14 @@ in
   gemspec ? null, # path to *.gemspec when the Gemfile uses the `gemspec` directive
   extraFiles ? { }, # { "relative/dest" = ./src; } — files the gemspec require_relatives
   gemConfig ? defaultGemConfig,
+  # Credentials for private gem registries, keyed by remote host:
+  #   credentials."rubygems.pkg.github.com" = {
+  #     usernameVar = "GEM_REGISTRY_USER";
+  #     passwordVar = "GEM_REGISTRY_TOKEN";
+  #   };
+  # The variables are read from the build environment, never from the store.
+  # See lib/gemfile-env/credentials.nix for the daemon-environment caveat.
+  credentials ? { },
   ruby ? defaultRuby,
   debug ? false, # when true, builtins.trace each gem being built
   ...
@@ -52,6 +60,10 @@ let
   };
   gemMetadata = parsed.gems;
   depGraph = parsed.depGraph;
+
+  # ── credentials (pure logic lives in credentials.nix) ────────
+  credentialHelpers = import ./credentials.nix { inherit lib; };
+  checkedCredentials = credentialHelpers.warnUnusedCredentials (credentialHelpers.validateCredentials credentials) gemMetadata;
 
   # ── filtering (pure logic lives in resolve.nix) ─────────────
   filterHelpers = import ./resolve.nix { inherit lib; };
@@ -102,11 +114,29 @@ let
     let
       configured =
         if gemAttrs.platform == "ruby" then applyGemConfigs mergedGemConfig gemAttrs else gemAttrs;
+      # buildRubyGem derives `src` from source.remotes and source.sha256 alone,
+      # with no way to pass fetchurl the netrc arguments. Handing it a finished
+      # `src` is the only opening, so gems on a credentialed remote get one.
+      credential = credentialHelpers.credentialFor checkedCredentials configured;
+      authenticated =
+        if credential == null then
+          configured
+        else
+          configured
+          // {
+            src = fetchurl (
+              {
+                urls = credentialHelpers.gemUrls configured;
+                inherit (configured.source) sha256;
+              }
+              // credentialHelpers.netrcFetchAttrs credential
+            );
+          };
       traced =
         if debug then
-          builtins.trace "gems4nix [debug]: building ${configured.gemName} ${configured.version} (${configured.platform})" configured
+          builtins.trace "gems4nix [debug]: building ${configured.gemName} ${configured.version} (${configured.platform})${lib.optionalString (credential != null) " with credentials for ${credential.host}"}" authenticated
         else
-          configured;
+          authenticated;
     in
     buildRubyGem traced
   ) platformResolvedGemsByName;

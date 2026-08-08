@@ -76,6 +76,13 @@
           unit-pipeline = nixEvalCheck "pipeline" ./test/unit/test-pipeline-logic.nix;
           unit-credentials = nixEvalCheck "credentials" ./test/unit/test-credentials-logic.nix;
 
+          # Asserts credential plumbing on derivation attributes only; no fetch.
+          credentials-wiring = pkgs.writeText "credentials-wiring" (
+            builtins.deepSeq (import ./test/integration/credentials/wiring.nix {
+              inherit pkgs gemfileEnv;
+            }) "PASS"
+          );
+
           integration-platform-gems =
             pkgs.runCommand "integration-platform-gems"
               {
