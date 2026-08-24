@@ -1,5 +1,3 @@
-# TODO: git source
-#
 # IO shell: reads files, runs Ruby for group info, delegates pure logic to
 # parser-helpers.nix. All testable logic lives there.
 #
@@ -21,6 +19,9 @@
 {
   gemfile,
   gemfileLock,
+  # Base directory that PATH `remote:` values are resolved against. Bundler
+  # writes them relative to the Gemfile's directory, which is the default.
+  root ? null,
 }:
 
 let
@@ -52,8 +53,29 @@ let
   gemRemotes = buildGemRemotes parsed.gemSections;
   gemGroups = builtins.fromJSON (builtins.readFile gemGroupsJson);
 
+  pathRoot = if root != null then root else builtins.dirOf gemfile;
+
+  # Resolve PATH remotes eagerly so a missing directory names the `root`
+  # argument here, rather than surfacing as an opaque unpack failure inside
+  # buildRubyGem much later.
+  pathSections = lib.lists.map (
+    section:
+    let
+      resolved = pathRoot + "/${section.remote}";
+    in
+    if builtins.pathExists resolved then
+      section
+    else
+      throw "gems4nix: PATH source '${section.remote}' does not exist at ${toString resolved}. Pass `root` to gemfileEnv if the Gemfile is not co-located with its path gems."
+  ) parsed.pathSections;
+
 in
 mergeGemMetadata {
-  inherit (parsed) checksumSection;
-  inherit gemRemotes gemGroups;
+  inherit (parsed) checksumSection gitSections;
+  inherit
+    gemRemotes
+    gemGroups
+    pathSections
+    pathRoot
+    ;
 }

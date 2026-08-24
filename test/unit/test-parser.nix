@@ -322,38 +322,48 @@ let
     in
     assertEq "parseGitSection: submodules: false stays false" result.submodules false;
 
-  test_parseGitSection_missing_revision = assertThrows "parseGitSection: missing revision throws" (parseGitSection [
-    "  remote: https://github.com/example/repo.git"
-    "  specs:"
-    "    repo (1.0.0)"
-  ]);
+  test_parseGitSection_missing_revision =
+    assertThrows "parseGitSection: missing revision throws"
+      (parseGitSection [
+        "  remote: https://github.com/example/repo.git"
+        "  specs:"
+        "    repo (1.0.0)"
+      ]);
 
-  test_parseGitSection_missing_remote = assertThrows "parseGitSection: missing remote throws" (parseGitSection [
-    "  revision: abc123"
-    "  specs:"
-    "    repo (1.0.0)"
-  ]);
+  test_parseGitSection_missing_remote =
+    assertThrows "parseGitSection: missing remote throws"
+      (parseGitSection [
+        "  revision: abc123"
+        "  specs:"
+        "    repo (1.0.0)"
+      ]);
 
-  test_parseGitSection_glob_throws = assertThrows "parseGitSection: glob: is unsupported and throws" (parseGitSection [
-    "  remote: https://github.com/example/monorepo.git"
-    "  revision: abc123"
-    "  glob: \"{,*,*/*}.gemspec\""
-    "  specs:"
-    "    repo (1.0.0)"
-  ]);
+  test_parseGitSection_glob_throws =
+    assertThrows "parseGitSection: glob: is unsupported and throws"
+      (parseGitSection [
+        "  remote: https://github.com/example/monorepo.git"
+        "  revision: abc123"
+        "  glob: \"{,*,*/*}.gemspec\""
+        "  specs:"
+        "    repo (1.0.0)"
+      ]);
 
-  test_parseGitSection_unknown_key_throws = assertThrows "parseGitSection: unknown key throws" (parseGitSection [
-    "  remote: https://github.com/example/repo.git"
-    "  revision: abc123"
-    "  frobnicate: yes"
-    "  specs:"
-    "    repo (1.0.0)"
-  ]);
+  test_parseGitSection_unknown_key_throws =
+    assertThrows "parseGitSection: unknown key throws"
+      (parseGitSection [
+        "  remote: https://github.com/example/repo.git"
+        "  revision: abc123"
+        "  frobnicate: yes"
+        "  specs:"
+        "    repo (1.0.0)"
+      ]);
 
-  test_parseGitSection_missing_specs_throws = assertThrows "parseGitSection: missing specs: throws" (parseGitSection [
-    "  remote: https://github.com/example/repo.git"
-    "  revision: abc123"
-  ]);
+  test_parseGitSection_missing_specs_throws =
+    assertThrows "parseGitSection: missing specs: throws"
+      (parseGitSection [
+        "  remote: https://github.com/example/repo.git"
+        "  revision: abc123"
+      ]);
 
   # ── parsePathSection ─────────────────────────────────────────
 
@@ -386,20 +396,24 @@ let
     assertEq "parsePathSection: '.' remote" result.remote "."
     && assertEq "parsePathSection: '.' remote gem name" (builtins.elemAt result.gems 0).gemName "mygem";
 
-  test_parsePathSection_glob_throws = assertThrows "parsePathSection: glob: is unsupported and throws" (parsePathSection [
-    "  remote: vendor"
-    "  glob: \"*/*.gemspec\""
-    "  specs:"
-    "    hello_gem (0.1.0)"
-  ]);
+  test_parsePathSection_glob_throws =
+    assertThrows "parsePathSection: glob: is unsupported and throws"
+      (parsePathSection [
+        "  remote: vendor"
+        "  glob: \"*/*.gemspec\""
+        "  specs:"
+        "    hello_gem (0.1.0)"
+      ]);
 
   # ── parseSectionBody ─────────────────────────────────────────
 
-  test_parseSectionBody_duplicate_key_throws = assertThrows "parseSectionBody: repeated option key throws rather than silently overwriting" (parseSectionBody [
-    "  remote: https://a.example.com"
-    "  remote: https://b.example.com"
-    "  specs:"
-  ]);
+  test_parseSectionBody_duplicate_key_throws =
+    assertThrows "parseSectionBody: repeated option key throws rather than silently overwriting"
+      (parseSectionBody [
+        "  remote: https://a.example.com"
+        "  remote: https://b.example.com"
+        "  specs:"
+      ]);
 
   # ── parseLockfileContent ─────────────────────────────────────
 
@@ -595,9 +609,7 @@ let
     in
     assertEq "buildGemRemotes: git gem absent" (result ? errgonomic) false
     && assertEq "buildGemRemotes: path gem absent" (result ? hello_gem) false
-    &&
-      assertEq "buildGemRemotes: git dependency line absent" (result ? "concurrent-ruby")
-        false
+    && assertEq "buildGemRemotes: git dependency line absent" (result ? "concurrent-ruby") false
     && assertEq "buildGemRemotes: real GEM gem present" result.rake "https://rubygems.org";
 
   # ── buildGemRemotes ──────────────────────────────────────────
@@ -789,8 +801,7 @@ let
     && assertEq "mergeGemMetadata: git version" byName.errgonomic.version "0.5.1"
     && assertEq "mergeGemMetadata: path source type" byName.hello_gem.source.type "path"
     &&
-      assertEq "mergeGemMetadata: path resolved against pathRoot"
-        (toString byName.hello_gem.source.path)
+      assertEq "mergeGemMetadata: path resolved against pathRoot" (toString byName.hello_gem.source.path)
         "/tmp/fixture/vendor/hello_gem"
     && assertEq "mergeGemMetadata: gem source still built from checksums" byName.rake.source.type "gem";
 
@@ -822,33 +833,37 @@ let
       (toString (builtins.elemAt result 0).source.path)
       "/tmp/fixture";
 
-  test_mergeGemMetadata_duplicate_name_throws = assertThrows "mergeGemMetadata: gem in both CHECKSUMS and a GIT section throws" (mergeGemMetadata {
-    checksumSection = [
-      {
-        gemName = "errgonomic";
-        version = "0.5.1";
-        platform = "ruby";
-        source = {
-          sha256 = "aaaa";
+  test_mergeGemMetadata_duplicate_name_throws =
+    assertThrows "mergeGemMetadata: gem in both CHECKSUMS and a GIT section throws"
+      (mergeGemMetadata {
+        checksumSection = [
+          {
+            gemName = "errgonomic";
+            version = "0.5.1";
+            platform = "ruby";
+            source = {
+              sha256 = "aaaa";
+            };
+          }
+        ];
+        gemRemotes = {
+          errgonomic = "https://rubygems.org";
         };
-      }
-    ];
-    gemRemotes = {
-      errgonomic = "https://rubygems.org";
-    };
-    gemGroups = {
-      errgonomic = [ "default" ];
-    };
-    gitSections = fixtureGitSections;
-  });
+        gemGroups = {
+          errgonomic = [ "default" ];
+        };
+        gitSections = fixtureGitSections;
+      });
 
-  test_mergeGemMetadata_path_without_root_throws = assertThrows "mergeGemMetadata: pathSections with a null pathRoot throws" (mergeGemMetadata {
-    checksumSection = [ ];
-    gemRemotes = { };
-    gemGroups = { };
-    pathSections = fixturePathSections;
-    pathRoot = null;
-  });
+  test_mergeGemMetadata_path_without_root_throws =
+    assertThrows "mergeGemMetadata: pathSections with a null pathRoot throws"
+      (mergeGemMetadata {
+        checksumSection = [ ];
+        gemRemotes = { };
+        gemGroups = { };
+        pathSections = fixturePathSections;
+        pathRoot = null;
+      });
 
   # Regression: lockfiles with no GIT/PATH sections must produce exactly the
   # same output as before this change (examples/simple, examples/medium,

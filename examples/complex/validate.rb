@@ -57,8 +57,14 @@ rescue StandardError => e
   failures << "bootsnap: #{e.message}"
 end
 
-# errgonomic: from a GIT lockfile section
+# errgonomic: from a GIT lockfile section.
+# It loads its railtie whenever Rails::Railtie is defined, and that railtie
+# references ActiveModel and ActiveRecord constants at class-definition time.
+# `require 'rails'` alone does not pull those in (a real app gets them from the
+# framework boot), so require them here. Nothing to do with gem sourcing.
 begin
+  require 'active_model'
+  require 'active_record'
   require 'errgonomic'
   puts "OK  errgonomic #{Errgonomic::VERSION}"
 rescue StandardError => e

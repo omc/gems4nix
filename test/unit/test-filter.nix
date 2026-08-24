@@ -653,9 +653,9 @@ let
         groups = [ ];
       };
     in
-    assertEq "filterGroup: git gem with empty groups is dropped (TODO #5)"
-      (filterGroup [ "default" ] orphanGitGem)
-      false;
+    assertEq "filterGroup: git gem with empty groups is dropped (TODO #5)" (filterGroup [
+      "default"
+    ] orphanGitGem) false;
 
   # ── all tests ────────────────────────────────────────────────
 
