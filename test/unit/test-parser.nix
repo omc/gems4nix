@@ -864,8 +864,9 @@ let
         pathRoot = null;
       });
 
-  # A lockfile with no GIT or PATH section must give the same result as
-  # before. examples/simple, examples/medium and test/rails all rely on it.
+  # A lockfile with no GIT or PATH section must give the same result as it did
+  # before git and path support existed. examples/simple, examples/medium and
+  # test/rails all rely on that.
   test_mergeGemMetadata_no_git_path_unchanged =
     let
       args = {

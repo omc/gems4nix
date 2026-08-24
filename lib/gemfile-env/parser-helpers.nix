@@ -169,10 +169,10 @@ let
   #
   #   2 spaces   an option, such as `remote:`
   #   4 spaces   a gem this source provides
-  #   6 spaces   a dependency of the gem above it, provided by some other source
+  #   6 spaces   a dependency of the gem above it
   #
-  # A 6-space line names a gem that this source does not contain. Count the
-  # spaces, or such a line becomes a gem that nothing can build.
+  # A 6-space line names a dependency, not a gem to build from this section.
+  # Count the spaces, or such a line becomes a gem that nothing can build.
   #
   # Returns: { headers = { remote = "..."; ... }; specLines = [ ... ]; hasSpecs = bool; }
   parseSectionBody =
@@ -470,7 +470,8 @@ let
             # Add the whole suffix in one step. Nix resolves "." and ".."
             # only when it joins a path to a complete string, so a remote of
             # "." or "../shared" needs this form. Two steps, as in
-            # (pathRoot + "/") + remote, leave a literal "/." in the path.
+            # (pathRoot + "/") + remote, do not work: Nix drops the trailing
+            # slash first, so "." gives the sibling path /tmp/fixture.
             path = pathRoot + "/${section.remote}";
           };
         }) section.gems

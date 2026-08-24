@@ -42,9 +42,9 @@
   # Replace the source of one git gem. Give a derivation or path to use as
   # `src`, or a function that receives the gem's `source` and returns one.
   #
-  # Use this to avoid builtins.fetchGit. It runs during evaluation, needs the
-  # network then, and no binary cache can serve its result. A fetchgit with a
-  # known hash has none of those limits.
+  # Use this to avoid builtins.fetchGit. That function runs while Nix
+  # evaluates, needs the network then, and no binary cache can serve its
+  # result. A fetchgit with a known hash has none of those limits.
   gemSrcOverrides ? { },
   ...
 }:
@@ -129,6 +129,9 @@ let
   #      nix-support directory, and the hook lives there.
   #   3. `type = "git"` also needs a sha256. A Gemfile.lock has no such field.
   #
+  # Path gems must not use the pathDerivation helper either. TODO item 13
+  # explains both rejections and what would have to change first.
+  #
   # When we pass `src`, buildRubyGem skips its own fetcher. A directory `src`
   # then unpacks the normal stdenv way, and the gem builds and installs.
   mkGemSrc =
@@ -138,7 +141,8 @@ let
         {
           inherit (gem.source) url rev;
           # A locked revision is often not the tip of a branch. Some git
-          # servers refuse to send such a revision on its own. Fetch every ref
+          # servers refuse to send such a revision on its own, because
+          # `uploadpack.allowAnySHA1InWant` is off by default. Fetch every ref
           # to get it. The revision alone decides the result, so this costs
           # only fetch time.
           allRefs = true;
