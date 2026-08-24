@@ -294,7 +294,10 @@ let
         allowedKeys = [ "remote" ];
       };
     in
-    {
+    # seq so validateSection's throws fire on WHNF rather than only when a
+    # caller happens to force `remote`. parseGitSection gets this for free
+    # (its body is an `if` on a header), this one does not.
+    builtins.seq h {
       inherit (h) remote;
       gems = lib.lists.map parseSpecLine body.specLines;
     };
@@ -350,6 +353,9 @@ let
       # Every hashless CHECKSUMS entry must be accounted for by a GIT or PATH
       # section. Anything left over would be dropped from the environment and
       # only surface as a LoadError at runtime.
+      # Matched by name, not name+version: Bundler never emits a hashless entry
+      # whose version disagrees with its source section, so checking the version
+      # too would only add a failure mode for hand-edited lockfiles.
       sourcedNames = lib.lists.map (g: g.gemName) (
         lib.lists.concatMap (s: s.gems) (gitSections ++ pathSections)
       );

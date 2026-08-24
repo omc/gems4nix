@@ -2,13 +2,18 @@
 #
 # This example exercises the full pipeline:
 # - ~60 gems from rubygems.org (GEM section)
-# - errgonomic from a git repo (GIT section) -- requires TODO #13
-# - hello_gem from a local path (PATH section) -- requires TODO #13
+# - errgonomic from a git repo (GIT section)
+# - hello_gem from a local path (PATH section)
 # - Native gems with platform variants (nokogiri, ffi, puma)
 # - Group filtering (default + development + test)
 #
-# Run: nix build .#check
-# Expected: git/path source gems fail until TODO #13 is implemented.
+# Run: nix flake check --no-write-lock-file
+#
+# Note: the GIT gem is fetched by builtins.fetchGit at EVALUATION time, so this
+# needs network access even when everything else is cached.
+#
+# `root` is deliberately not passed: PATH remotes default to dirOf ./Gemfile,
+# and this example is the test that the default resolves correctly.
 {
   description = "gems4nix example: complex Rails app with git and path sources";
 

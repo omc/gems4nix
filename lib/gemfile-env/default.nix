@@ -152,14 +152,36 @@ let
     else
       gem.source.path;
 
+  # A gemSrcOverrides entry naming a gem with no git/path source does nothing.
+  # Silently ignoring it would defeat the argument's entire purpose (a typo in
+  # a hermetic build's override means fetchGit runs at eval anyway), so refuse.
+  # Checked against every git/path gem in the lockfile, not just the ones that
+  # survived group/platform filtering, so an override for a test-group gem in
+  # a production build is not an error.
+  sourcedGemNames = builtins.map (g: g.gemName) (
+    builtins.filter (g: g.source.type != "gem") gemMetadata
+  );
+  unknownSrcOverrides = builtins.filter (n: !(builtins.elem n sourcedGemNames)) (
+    builtins.attrNames gemSrcOverrides
+  );
+  srcOverridesChecked =
+    if unknownSrcOverrides != [ ] then
+      throw "gems4nix: gemSrcOverrides names '${builtins.head unknownSrcOverrides}', which has no GIT or PATH source in the lockfile"
+    else
+      true;
+
+  # buildRubyGem defaults `ruby` to the one callPackage handed it, so without
+  # threading ours through, a user-supplied `ruby` argument was accepted and
+  # then silently ignored. Identical derivation when it is the default.
   buildGem =
     attrs:
     if attrs.source.type == "gem" then
-      buildRubyGem attrs
+      buildRubyGem (attrs // { inherit ruby; })
     else
       buildRubyGem (
         attrs
         // {
+          inherit ruby;
           type = "gem";
           src =
             if gemSrcOverrides ? ${attrs.gemName} then
@@ -213,6 +235,7 @@ let
     buildGem configured
   ) platformResolvedGemsByName;
 in
+assert srcOverridesChecked == true;
 buildEnv {
   name = "${name}-${lib.strings.concatStringsSep "-" groups}-${lib.strings.concatStringsSep "-" resolvedPlatforms}";
   paths = finalGems;

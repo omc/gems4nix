@@ -7,7 +7,7 @@ This project does make use of existing Nixpkgs abstractions as much as possible 
 Quick reference:
 
 ```nix
-gemEnv {
+gemfileEnv {
   name = "test-gem-env";
   gemfile = ./Gemfile;
   gemfileLock = ./Gemfile.lock;
@@ -19,7 +19,7 @@ Platforms are auto-detected from `stdenv.hostPlatform.system`. The mapping cover
 You can also provide `groups` to filter gems:
 
 ```nix
-gemEnv {
+gemfileEnv {
   name = "gems-prod";
   gemfile = ./Gemfile;
   gemfileLock = ./Gemfile.lock;
@@ -116,12 +116,12 @@ real and worth knowing:
   };
   ```
 
-Path remotes are resolved relative to the Gemfile's directory. Pass `root` if
-your Gemfile isn't co-located with its path gems (a `writeText` Gemfile, or a
-`remote: ../shared/mygem` pointing outside the flake):
+Path remotes are resolved relative to the Gemfile's directory. Pass `root` when
+that isn't where the path gems live — most often a Gemfile generated into the
+store with `writeText`, whose `dirOf` is `/nix/store`:
 
 ```nix
-gemEnv {
+gemfileEnv {
   name = "my-app";
   gemfile = ./Gemfile;
   gemfileLock = ./Gemfile.lock;
@@ -129,7 +129,11 @@ gemEnv {
 }
 ```
 
-Note that a path gem's source must be inside the flake for Nix to see it.
+`root` must be a Nix **path**, not a string: `..` and `.` in a remote are
+normalised by path arithmetic, and a string wouldn't be copied into the store.
+A path gem's source still has to be reachable from the flake — `remote:
+../shared/mygem` only works if that directory is inside the flake's source
+tree. A missing one is an evaluation error naming `root`, not a silent skip.
 
 Known limitations, stated rather than implied:
 
