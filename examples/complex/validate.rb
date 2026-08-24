@@ -57,27 +57,21 @@ rescue StandardError => e
   failures << "bootsnap: #{e.message}"
 end
 
-# errgonomic: from git source (TODO #13: git sources)
-# Expected to fail until git source parsing is implemented.
+# errgonomic: from a GIT lockfile section
 begin
   require 'errgonomic'
   puts "OK  errgonomic #{Errgonomic::VERSION}"
-rescue LoadError => e
-  puts 'SKIP  errgonomic (git source not yet supported: TODO #13)'
 rescue StandardError => e
   failures << "errgonomic: #{e.message}"
 end
 
-# hello_gem: from path source (TODO #13: path sources)
-# Expected to fail until path source parsing is implemented.
+# hello_gem: from a PATH lockfile section
 begin
   require 'hello_gem'
   msg = HelloGem.greet
   raise "greet returned #{msg.inspect}" unless msg == 'hello from gems4nix'
 
   puts "OK  hello_gem #{HelloGem::VERSION}"
-rescue LoadError => e
-  puts 'SKIP  hello_gem (path source not yet supported: TODO #13)'
 rescue StandardError => e
   failures << "hello_gem: #{e.message}"
 end
