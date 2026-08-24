@@ -13,6 +13,10 @@ let
     findIndices
     takeLines
     parseChecksumLine
+    parseSpecLine
+    parseSectionBody
+    parseGitSection
+    parsePathSection
     parseGemSection
     parseLockfileContent
     buildGemRemotes
@@ -202,6 +206,201 @@ let
       "zeitwerk"
     ];
 
+  # ── parseSpecLine ────────────────────────────────────────────
+
+  test_parseSpecLine_simple =
+    let
+      result = parseSpecLine "    errgonomic (0.5.1)";
+    in
+    assertEq "parseSpecLine: gemName" result.gemName "errgonomic"
+    && assertEq "parseSpecLine: version" result.version "0.5.1"
+    && assertEq "parseSpecLine: platform defaults to ruby" result.platform "ruby";
+
+  test_parseSpecLine_platform =
+    let
+      result = parseSpecLine "    ffi (1.17.3-aarch64-linux-gnu)";
+    in
+    assertEq "parseSpecLine: platform gem gemName" result.gemName "ffi"
+    && assertEq "parseSpecLine: platform gem version" result.version "1.17.3"
+    && assertEq "parseSpecLine: multi-segment platform" result.platform "aarch64-linux-gnu";
+
+  # ── parseGitSection ──────────────────────────────────────────
+
+  gitSectionLines = [
+    "  remote: https://github.com/omc/errgonomic.git"
+    "  revision: f06314af89209f855019219fd198513855be0fd5"
+    "  branch: main"
+    "  specs:"
+    "    errgonomic (0.5.1)"
+    "      concurrent-ruby (~> 1.0)"
+  ];
+
+  test_parseGitSection_basic =
+    let
+      result = parseGitSection gitSectionLines;
+    in
+    assertEq "parseGitSection: remote" result.remote "https://github.com/omc/errgonomic.git"
+    && assertEq "parseGitSection: revision" result.revision "f06314af89209f855019219fd198513855be0fd5"
+    && assertEq "parseGitSection: branch" result.branch "main"
+    && assertEq "parseGitSection: tag defaults null" result.tag null
+    && assertEq "parseGitSection: ref defaults null" result.ref null
+    && assertEq "parseGitSection: submodules defaults false" result.submodules false
+    # The 6-space dependency line is NOT a gem. parseGemSection gets this
+    # wrong (see test_parseGemSection_deps_included); GIT sections must not.
+    && assertEq "parseGitSection: only the 4-space spec line is a gem" result.gems [
+      {
+        gemName = "errgonomic";
+        version = "0.5.1";
+        platform = "ruby";
+      }
+    ];
+
+  test_parseGitSection_multiple_gems =
+    let
+      result = parseGitSection [
+        "  remote: https://github.com/example/monorepo.git"
+        "  revision: abc123"
+        "  specs:"
+        "    first_gem (1.0.0)"
+        "      rake (>= 12)"
+        "    second_gem (2.0.0)"
+        "      first_gem (= 1.0.0)"
+      ];
+    in
+    assertEq "parseGitSection: multi-gem block yields both gems" (map (g: g.gemName) result.gems) [
+      "first_gem"
+      "second_gem"
+    ];
+
+  test_parseGitSection_tag =
+    let
+      result = parseGitSection [
+        "  remote: https://github.com/example/repo.git"
+        "  revision: abc123"
+        "  tag: v1.2.3"
+        "  specs:"
+        "    repo (1.2.3)"
+      ];
+    in
+    assertEq "parseGitSection: tag captured" result.tag "v1.2.3"
+    && assertEq "parseGitSection: branch null when only tag" result.branch null;
+
+  test_parseGitSection_ref =
+    let
+      result = parseGitSection [
+        "  remote: https://github.com/example/repo.git"
+        "  revision: abc1234deadbeef"
+        "  ref: abc1234"
+        "  specs:"
+        "    repo (1.0.0)"
+      ];
+    in
+    assertEq "parseGitSection: ref captured" result.ref "abc1234";
+
+  test_parseGitSection_submodules =
+    let
+      result = parseGitSection [
+        "  remote: https://github.com/example/repo.git"
+        "  revision: abc123"
+        "  submodules: true"
+        "  specs:"
+        "    repo (1.0.0)"
+      ];
+    in
+    assertEq "parseGitSection: submodules coerced to boolean true" result.submodules true;
+
+  # A literal "false" must not be truthy.
+  test_parseGitSection_submodules_false =
+    let
+      result = parseGitSection [
+        "  remote: https://github.com/example/repo.git"
+        "  revision: abc123"
+        "  submodules: false"
+        "  specs:"
+        "    repo (1.0.0)"
+      ];
+    in
+    assertEq "parseGitSection: submodules: false stays false" result.submodules false;
+
+  test_parseGitSection_missing_revision = assertThrows "parseGitSection: missing revision throws" (parseGitSection [
+    "  remote: https://github.com/example/repo.git"
+    "  specs:"
+    "    repo (1.0.0)"
+  ]);
+
+  test_parseGitSection_missing_remote = assertThrows "parseGitSection: missing remote throws" (parseGitSection [
+    "  revision: abc123"
+    "  specs:"
+    "    repo (1.0.0)"
+  ]);
+
+  test_parseGitSection_glob_throws = assertThrows "parseGitSection: glob: is unsupported and throws" (parseGitSection [
+    "  remote: https://github.com/example/monorepo.git"
+    "  revision: abc123"
+    "  glob: \"{,*,*/*}.gemspec\""
+    "  specs:"
+    "    repo (1.0.0)"
+  ]);
+
+  test_parseGitSection_unknown_key_throws = assertThrows "parseGitSection: unknown key throws" (parseGitSection [
+    "  remote: https://github.com/example/repo.git"
+    "  revision: abc123"
+    "  frobnicate: yes"
+    "  specs:"
+    "    repo (1.0.0)"
+  ]);
+
+  test_parseGitSection_missing_specs_throws = assertThrows "parseGitSection: missing specs: throws" (parseGitSection [
+    "  remote: https://github.com/example/repo.git"
+    "  revision: abc123"
+  ]);
+
+  # ── parsePathSection ─────────────────────────────────────────
+
+  test_parsePathSection_basic =
+    let
+      result = parsePathSection [
+        "  remote: vendor/hello_gem"
+        "  specs:"
+        "    hello_gem (0.1.0)"
+      ];
+    in
+    assertEq "parsePathSection: remote" result.remote "vendor/hello_gem"
+    && assertEq "parsePathSection: gems" result.gems [
+      {
+        gemName = "hello_gem";
+        version = "0.1.0";
+        platform = "ruby";
+      }
+    ];
+
+  # A Gemfile using the `gemspec` directive locks the app's own gem at ".".
+  test_parsePathSection_dot_remote =
+    let
+      result = parsePathSection [
+        "  remote: ."
+        "  specs:"
+        "    mygem (0.1.0)"
+      ];
+    in
+    assertEq "parsePathSection: '.' remote" result.remote "."
+    && assertEq "parsePathSection: '.' remote gem name" (builtins.elemAt result.gems 0).gemName "mygem";
+
+  test_parsePathSection_glob_throws = assertThrows "parsePathSection: glob: is unsupported and throws" (parsePathSection [
+    "  remote: vendor"
+    "  glob: \"*/*.gemspec\""
+    "  specs:"
+    "    hello_gem (0.1.0)"
+  ]);
+
+  # ── parseSectionBody ─────────────────────────────────────────
+
+  test_parseSectionBody_duplicate_key_throws = assertThrows "parseSectionBody: repeated option key throws rather than silently overwriting" (parseSectionBody [
+    "  remote: https://a.example.com"
+    "  remote: https://b.example.com"
+    "  specs:"
+  ]);
+
   # ── parseLockfileContent ─────────────────────────────────────
 
   minimalLockfile = ''
@@ -304,6 +503,8 @@ let
 
   # ── parseLockfileContent: git/path gems skipped ─────────────
 
+  # concurrent-ruby appears ONLY as a 6-space dependency line inside the GIT
+  # section: it is the canary for GIT/PATH leakage into the GEM remote table.
   gitPathLockfile = ''
     GIT
       remote: https://github.com/omc/errgonomic.git
@@ -311,6 +512,7 @@ let
       branch: main
       specs:
         errgonomic (0.5.1)
+          concurrent-ruby (~> 1.0)
 
     PATH
       remote: vendor/hello_gem
@@ -340,6 +542,63 @@ let
       assertEq "parseLockfileContent: surviving gem is rake"
         (builtins.elemAt result.checksumSection 0).gemName
         "rake";
+
+  test_parseLockfileContent_git_path_sections =
+    let
+      result = parseLockfileContent gitPathLockfile;
+      git = builtins.elemAt result.gitSections 0;
+      path = builtins.elemAt result.pathSections 0;
+    in
+    assertEq "parseLockfileContent: one GIT section" (builtins.length result.gitSections) 1
+    && assertEq "parseLockfileContent: one PATH section" (builtins.length result.pathSections) 1
+    && assertEq "parseLockfileContent: GIT remote" git.remote "https://github.com/omc/errgonomic.git"
+    && assertEq "parseLockfileContent: GIT gems" (map (g: g.gemName) git.gems) [ "errgonomic" ]
+    && assertEq "parseLockfileContent: PATH remote" path.remote "vendor/hello_gem"
+    && assertEq "parseLockfileContent: PATH gems" (map (g: g.gemName) path.gems) [ "hello_gem" ];
+
+  # Every hashless CHECKSUMS entry must be explained by a GIT or PATH section.
+  # Otherwise the gem is silently dropped from the environment (the bug this
+  # whole change exists to remove).
+  test_parseLockfileContent_unexplained_hashless_throws = assertThrows "parseLockfileContent: hashless checksum with no GIT/PATH source throws" (parseLockfileContent ''
+    GEM
+      remote: https://rubygems.org/
+      specs:
+        rake (13.0.6)
+
+    CHECKSUMS
+      rake (13.0.6) sha256=aaaa
+      mystery_gem (1.0.0)
+  '');
+
+  test_parseLockfileContent_plugin_source_throws = assertThrows "parseLockfileContent: PLUGIN SOURCE throws" (parseLockfileContent ''
+    PLUGIN SOURCE
+      remote: https://github.com/example/plugin.git
+      type: example
+      specs:
+        plugged (1.0.0)
+
+    GEM
+      remote: https://rubygems.org/
+      specs:
+        rake (13.0.6)
+
+    CHECKSUMS
+      rake (13.0.6) sha256=aaaa
+  '');
+
+  # §3e: GIT/PATH sections must never reach buildGemRemotes. listToAttrs is
+  # first-writer-wins and Bundler emits GIT/PATH before GEM, so any leakage
+  # would silently shadow the real rubygems.org remote.
+  test_buildGemRemotes_excludes_git_path =
+    let
+      result = buildGemRemotes (parseLockfileContent gitPathLockfile).gemSections;
+    in
+    assertEq "buildGemRemotes: git gem absent" (result ? errgonomic) false
+    && assertEq "buildGemRemotes: path gem absent" (result ? hello_gem) false
+    &&
+      assertEq "buildGemRemotes: git dependency line absent" (result ? "concurrent-ruby")
+        false
+    && assertEq "buildGemRemotes: real GEM gem present" result.rake "https://rubygems.org";
 
   # ── buildGemRemotes ──────────────────────────────────────────
 
@@ -450,6 +709,187 @@ let
     in
     assertEq "mergeGemMetadata: missing group defaults to []" gem.groups [ ];
 
+  # ── mergeGemMetadata: git and path sources ───────────────────
+
+  fixtureGitSections = [
+    {
+      remote = "https://github.com/omc/errgonomic.git";
+      revision = "f06314af89209f855019219fd198513855be0fd5";
+      branch = "main";
+      tag = null;
+      ref = null;
+      submodules = false;
+      gems = [
+        {
+          gemName = "errgonomic";
+          version = "0.5.1";
+          platform = "ruby";
+        }
+      ];
+    }
+  ];
+
+  fixturePathSections = [
+    {
+      remote = "vendor/hello_gem";
+      gems = [
+        {
+          gemName = "hello_gem";
+          version = "0.1.0";
+          platform = "ruby";
+        }
+      ];
+    }
+  ];
+
+  test_mergeGemMetadata_git_and_path =
+    let
+      result = mergeGemMetadata {
+        checksumSection = [
+          {
+            gemName = "rake";
+            version = "13.0.6";
+            platform = "ruby";
+            source = {
+              sha256 = "aaaa";
+            };
+          }
+        ];
+        gemRemotes = {
+          rake = "https://rubygems.org";
+        };
+        gemGroups = {
+          rake = [ "default" ];
+          errgonomic = [ "default" ];
+          hello_gem = [ "default" ];
+        };
+        gitSections = fixtureGitSections;
+        pathSections = fixturePathSections;
+        pathRoot = /tmp/fixture;
+      };
+      byName = builtins.listToAttrs (
+        map (g: {
+          name = g.gemName;
+          value = g;
+        }) result
+      );
+    in
+    assertEq "mergeGemMetadata: git+path yields all three gems" (builtins.length result) 3
+    && assertEq "mergeGemMetadata: git source type" byName.errgonomic.source.type "git"
+    &&
+      assertEq "mergeGemMetadata: git url" byName.errgonomic.source.url
+        "https://github.com/omc/errgonomic.git"
+    &&
+      assertEq "mergeGemMetadata: git rev" byName.errgonomic.source.rev
+        "f06314af89209f855019219fd198513855be0fd5"
+    && assertEq "mergeGemMetadata: git fetchSubmodules" byName.errgonomic.source.fetchSubmodules false
+    && assertEq "mergeGemMetadata: git branch recorded" byName.errgonomic.source.branch "main"
+    && assertEq "mergeGemMetadata: git groups" byName.errgonomic.groups [ "default" ]
+    && assertEq "mergeGemMetadata: git platform" byName.errgonomic.platform "ruby"
+    && assertEq "mergeGemMetadata: git version" byName.errgonomic.version "0.5.1"
+    && assertEq "mergeGemMetadata: path source type" byName.hello_gem.source.type "path"
+    &&
+      assertEq "mergeGemMetadata: path resolved against pathRoot"
+        (toString byName.hello_gem.source.path)
+        "/tmp/fixture/vendor/hello_gem"
+    && assertEq "mergeGemMetadata: gem source still built from checksums" byName.rake.source.type "gem";
+
+  # `remote: .` must normalise to the root itself, not "/tmp/fixture/.".
+  test_mergeGemMetadata_path_dot_remote =
+    let
+      result = mergeGemMetadata {
+        checksumSection = [ ];
+        gemRemotes = { };
+        gemGroups = {
+          mygem = [ "default" ];
+        };
+        pathSections = [
+          {
+            remote = ".";
+            gems = [
+              {
+                gemName = "mygem";
+                version = "0.1.0";
+                platform = "ruby";
+              }
+            ];
+          }
+        ];
+        pathRoot = /tmp/fixture;
+      };
+    in
+    assertEq "mergeGemMetadata: '.' remote resolves to the root itself"
+      (toString (builtins.elemAt result 0).source.path)
+      "/tmp/fixture";
+
+  test_mergeGemMetadata_duplicate_name_throws = assertThrows "mergeGemMetadata: gem in both CHECKSUMS and a GIT section throws" (mergeGemMetadata {
+    checksumSection = [
+      {
+        gemName = "errgonomic";
+        version = "0.5.1";
+        platform = "ruby";
+        source = {
+          sha256 = "aaaa";
+        };
+      }
+    ];
+    gemRemotes = {
+      errgonomic = "https://rubygems.org";
+    };
+    gemGroups = {
+      errgonomic = [ "default" ];
+    };
+    gitSections = fixtureGitSections;
+  });
+
+  test_mergeGemMetadata_path_without_root_throws = assertThrows "mergeGemMetadata: pathSections with a null pathRoot throws" (mergeGemMetadata {
+    checksumSection = [ ];
+    gemRemotes = { };
+    gemGroups = { };
+    pathSections = fixturePathSections;
+    pathRoot = null;
+  });
+
+  # Regression: lockfiles with no GIT/PATH sections must produce exactly the
+  # same output as before this change (examples/simple, examples/medium,
+  # test/rails all depend on it).
+  test_mergeGemMetadata_no_git_path_unchanged =
+    let
+      args = {
+        checksumSection = [
+          {
+            gemName = "rake";
+            version = "13.0.6";
+            platform = "ruby";
+            source = {
+              sha256 = "aaaa";
+            };
+          }
+        ];
+        gemRemotes = {
+          rake = "https://rubygems.org";
+        };
+        gemGroups = {
+          rake = [ "default" ];
+        };
+      };
+    in
+    assertEq "mergeGemMetadata: no git/path sections yields the pre-existing shape"
+      (mergeGemMetadata args)
+      [
+        {
+          gemName = "rake";
+          version = "13.0.6";
+          platform = "ruby";
+          groups = [ "default" ];
+          source = {
+            sha256 = "aaaa";
+            remotes = [ "https://rubygems.org" ];
+            type = "gem";
+          };
+        }
+      ];
+
   # ── all tests ────────────────────────────────────────────────
 
   allTests =
@@ -473,6 +913,27 @@ let
     && test_parseGemSection_basic
     && test_parseGemSection_no_trailing_slash
     && test_parseGemSection_deps_included
+    # parseSpecLine
+    && test_parseSpecLine_simple
+    && test_parseSpecLine_platform
+    # parseGitSection
+    && test_parseGitSection_basic
+    && test_parseGitSection_multiple_gems
+    && test_parseGitSection_tag
+    && test_parseGitSection_ref
+    && test_parseGitSection_submodules
+    && test_parseGitSection_submodules_false
+    && test_parseGitSection_missing_revision
+    && test_parseGitSection_missing_remote
+    && test_parseGitSection_glob_throws
+    && test_parseGitSection_unknown_key_throws
+    && test_parseGitSection_missing_specs_throws
+    # parsePathSection
+    && test_parsePathSection_basic
+    && test_parsePathSection_dot_remote
+    && test_parsePathSection_glob_throws
+    # parseSectionBody
+    && test_parseSectionBody_duplicate_key_throws
     # parseLockfileContent
     && test_parseLockfileContent
     && test_parseLockfileContent_missing_checksums
@@ -482,12 +943,22 @@ let
     && test_parseLockfileContent_empty_gem_specs
     # parseLockfileContent: git/path gems
     && test_parseLockfileContent_skips_hashless
+    && test_parseLockfileContent_git_path_sections
+    && test_parseLockfileContent_unexplained_hashless_throws
+    && test_parseLockfileContent_plugin_source_throws
     # buildGemRemotes
     && test_buildGemRemotes
     && test_buildGemRemotes_first_writer_wins
+    && test_buildGemRemotes_excludes_git_path
     # mergeGemMetadata
     && test_mergeGemMetadata
-    && test_mergeGemMetadata_missing_group_defaults_empty;
+    && test_mergeGemMetadata_missing_group_defaults_empty
+    # mergeGemMetadata: git and path sources
+    && test_mergeGemMetadata_git_and_path
+    && test_mergeGemMetadata_path_dot_remote
+    && test_mergeGemMetadata_duplicate_name_throws
+    && test_mergeGemMetadata_path_without_root_throws
+    && test_mergeGemMetadata_no_git_path_unchanged;
 
 in
 allTests

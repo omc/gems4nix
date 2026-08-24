@@ -26,6 +26,11 @@ let
       platform ? "ruby",
       groups ? [ "default" ],
       version ? "1.0.0",
+      source ? {
+        sha256 = "fake";
+        remotes = [ "https://rubygems.org" ];
+        type = "gem";
+      },
     }:
     {
       inherit
@@ -33,12 +38,8 @@ let
         platform
         groups
         version
+        source
         ;
-      source = {
-        sha256 = "fake";
-        remotes = [ "https://rubygems.org" ];
-        type = "gem";
-      };
     };
 
   gemRake = mkGem {
@@ -581,6 +582,81 @@ let
         (builtins.elem "mini_portile2" names)
         true;
 
+  # ── git and path sourced gems ────────────────────────────────
+  #
+  # GIT/PATH spec lines carry no platform suffix, so these gems always land on
+  # platform "ruby" and must survive filtering on every supported system. The
+  # filter helpers never inspect `source`, so it must pass through untouched.
+
+  gitGem = mkGem {
+    gemName = "errgonomic";
+    version = "0.5.1";
+    source = {
+      type = "git";
+      url = "https://github.com/omc/errgonomic.git";
+      rev = "f06314af89209f855019219fd198513855be0fd5";
+      fetchSubmodules = false;
+      ref = null;
+      branch = "main";
+      tag = null;
+    };
+  };
+
+  pathGem = mkGem {
+    gemName = "hello_gem";
+    version = "0.1.0";
+    source = {
+      type = "path";
+      path = /tmp/fixture/vendor/hello_gem;
+    };
+  };
+
+  test_filterPlatform_git_gem_all_systems =
+    let
+      accepted = system: filterPlatform (platformsForSystem system) gitGem;
+    in
+    assertEq "filterPlatform: git gem accepted on aarch64-darwin" (accepted "aarch64-darwin") true
+    && assertEq "filterPlatform: git gem accepted on x86_64-darwin" (accepted "x86_64-darwin") true
+    && assertEq "filterPlatform: git gem accepted on aarch64-linux" (accepted "aarch64-linux") true
+    && assertEq "filterPlatform: git gem accepted on x86_64-linux" (accepted "x86_64-linux") true;
+
+  test_filterGroup_git_gem = assertEq "filterGroup: git gem in default group is kept" (filterGroup [
+    "default"
+  ] gitGem) true;
+
+  test_resolve_keeps_git_path_source =
+    let
+      result = resolvePlatforms darwinPrefs [
+        gitGem
+        pathGem
+        gemRake
+      ];
+    in
+    assertEq "resolvePlatforms: git/path gems get their own entries"
+      (builtins.sort builtins.lessThan (builtins.attrNames result))
+      [
+        "errgonomic"
+        "hello_gem"
+        "rake"
+      ]
+    && assertEq "resolvePlatforms: git source survives resolution" result.errgonomic.source.type "git"
+    && assertEq "resolvePlatforms: path source survives resolution" result.hello_gem.source.type "path";
+
+  # Documented current behaviour, not desired behaviour: a gem whose group set
+  # is empty is dropped. Top-level git/path gems always get ["default"] from
+  # gem-groups.rb (verified against examples/complex), so this does not bite
+  # them today, but a transitively-reached git gem that gem-groups.rb misses
+  # would vanish silently. That is TODO #5, tracked separately.
+  test_filterGroup_git_gem_without_groups =
+    let
+      orphanGitGem = gitGem // {
+        groups = [ ];
+      };
+    in
+    assertEq "filterGroup: git gem with empty groups is dropped (TODO #5)"
+      (filterGroup [ "default" ] orphanGitGem)
+      false;
+
   # ── all tests ────────────────────────────────────────────────
 
   allTests =
@@ -626,7 +702,12 @@ let
     && test_platformsForSystem_unknown_throws
     && test_platformsForSystem_filter_integration
     # regression: ruby-only nokogiri must keep build deps
-    && test_ruby_only_nokogiri_keeps_build_deps;
+    && test_ruby_only_nokogiri_keeps_build_deps
+    # git and path sourced gems
+    && test_filterPlatform_git_gem_all_systems
+    && test_filterGroup_git_gem
+    && test_resolve_keeps_git_path_source
+    && test_filterGroup_git_gem_without_groups;
 
 in
 allTests
