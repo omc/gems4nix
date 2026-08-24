@@ -245,8 +245,8 @@ let
     && assertEq "parseGitSection: tag defaults null" result.tag null
     && assertEq "parseGitSection: ref defaults null" result.ref null
     && assertEq "parseGitSection: submodules defaults false" result.submodules false
-    # The 6-space dependency line is NOT a gem. parseGemSection gets this
-    # wrong (see test_parseGemSection_deps_included); GIT sections must not.
+    # The 6-space line names a dependency, not a gem this source provides.
+    # parseGemSection counts it as a gem; a GIT section must not.
     && assertEq "parseGitSection: only the 4-space spec line is a gem" result.gems [
       {
         gemName = "errgonomic";
@@ -309,7 +309,7 @@ let
     in
     assertEq "parseGitSection: submodules coerced to boolean true" result.submodules true;
 
-  # A literal "false" must not be truthy.
+  # The value is a string, and the string "false" must stay false.
   test_parseGitSection_submodules_false =
     let
       result = parseGitSection [
@@ -384,7 +384,7 @@ let
       }
     ];
 
-  # A Gemfile using the `gemspec` directive locks the app's own gem at ".".
+  # A Gemfile with a `gemspec` directive locks the app's own gem at ".".
   test_parsePathSection_dot_remote =
     let
       result = parsePathSection [
@@ -517,8 +517,8 @@ let
 
   # ── parseLockfileContent: git/path gems skipped ─────────────
 
-  # concurrent-ruby appears ONLY as a 6-space dependency line inside the GIT
-  # section: it is the canary for GIT/PATH leakage into the GEM remote table.
+  # concurrent-ruby appears only as a 6-space dependency line in the GIT
+  # section. If it turns up in the remote table, GIT lines leaked into it.
   gitPathLockfile = ''
     GIT
       remote: https://github.com/omc/errgonomic.git
@@ -570,9 +570,8 @@ let
     && assertEq "parseLockfileContent: PATH remote" path.remote "vendor/hello_gem"
     && assertEq "parseLockfileContent: PATH gems" (map (g: g.gemName) path.gems) [ "hello_gem" ];
 
-  # Every hashless CHECKSUMS entry must be explained by a GIT or PATH section.
-  # Otherwise the gem is silently dropped from the environment (the bug this
-  # whole change exists to remove).
+  # A CHECKSUMS entry with no hash needs a GIT or PATH section to claim it.
+  # Without one the gem leaves the environment and nothing reports it.
   test_parseLockfileContent_unexplained_hashless_throws = assertThrows "parseLockfileContent: hashless checksum with no GIT/PATH source throws" (parseLockfileContent ''
     GEM
       remote: https://rubygems.org/
@@ -600,9 +599,9 @@ let
       rake (13.0.6) sha256=aaaa
   '');
 
-  # §3e: GIT/PATH sections must never reach buildGemRemotes. listToAttrs is
-  # first-writer-wins and Bundler emits GIT/PATH before GEM, so any leakage
-  # would silently shadow the real rubygems.org remote.
+  # GIT and PATH sections must never reach buildGemRemotes. It keeps the first
+  # remote it sees for a gem, and Bundler writes those sections before GEM
+  # ones, so a leak replaces a gem's real rubygems.org remote.
   test_buildGemRemotes_excludes_git_path =
     let
       result = buildGemRemotes (parseLockfileContent gitPathLockfile).gemSections;
@@ -805,7 +804,7 @@ let
         "/tmp/fixture/vendor/hello_gem"
     && assertEq "mergeGemMetadata: gem source still built from checksums" byName.rake.source.type "gem";
 
-  # `remote: .` must normalise to the root itself, not "/tmp/fixture/.".
+  # A remote of "." must resolve to the root, not to "/tmp/fixture/.".
   test_mergeGemMetadata_path_dot_remote =
     let
       result = mergeGemMetadata {
@@ -865,9 +864,8 @@ let
         pathRoot = null;
       });
 
-  # Regression: lockfiles with no GIT/PATH sections must produce exactly the
-  # same output as before this change (examples/simple, examples/medium,
-  # test/rails all depend on it).
+  # A lockfile with no GIT or PATH section must give the same result as
+  # before. examples/simple, examples/medium and test/rails all rely on it.
   test_mergeGemMetadata_no_git_path_unchanged =
     let
       args = {

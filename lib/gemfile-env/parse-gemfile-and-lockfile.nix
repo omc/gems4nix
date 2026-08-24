@@ -19,8 +19,8 @@
 {
   gemfile,
   gemfileLock,
-  # Base directory that PATH `remote:` values are resolved against. Bundler
-  # writes them relative to the Gemfile's directory, which is the default.
+  # Directory that PATH `remote:` values are relative to. Bundler writes them
+  # relative to the Gemfile, so that is the default.
   root ? null,
 }:
 
@@ -55,9 +55,9 @@ let
 
   pathRoot = if root != null then root else builtins.dirOf gemfile;
 
-  # Resolve PATH remotes eagerly so a missing directory names the `root`
-  # argument here, rather than surfacing as an opaque unpack failure inside
-  # buildRubyGem much later.
+  # Check the directories now. A missing one reported here can name `root` and
+  # say what to do. The same mistake found later, inside buildRubyGem, appears
+  # as an unpack error that explains nothing.
   pathSections = lib.lists.map (
     section:
     let

@@ -9,11 +9,11 @@
 #
 # Run: nix flake check --no-write-lock-file
 #
-# Note: the GIT gem is fetched by builtins.fetchGit at EVALUATION time, so this
-# needs network access even when everything else is cached.
+# Note: builtins.fetchGit gets the git gem while Nix evaluates this flake, so
+# the check needs the network even when every gem is already built.
 #
-# `root` is deliberately not passed: PATH remotes default to dirOf ./Gemfile,
-# and this example is the test that the default resolves correctly.
+# We leave `root` unset on purpose. PATH remotes then resolve against the
+# directory holding the Gemfile, and this example tests that default.
 {
   description = "gems4nix example: complex Rails app with git and path sources";
 

@@ -33,16 +33,18 @@
     "test"
   ],
   gemConfig ? defaultGemConfig,
-  # `ruby ? ruby` would be self-referential: a formal's default is evaluated in
-  # a scope that already binds that formal, so forcing it recurses forever.
+  # Write `defs.ruby`, not `ruby`. An argument's default can see the argument
+  # itself, so `ruby ? ruby` describes itself and never finishes.
   ruby ? defs.ruby,
-  # Base directory for PATH sources in the lockfile. Defaults to the Gemfile's
-  # own directory, which is what Bundler writes those remotes relative to.
+  # Directory that PATH sources are relative to. Defaults to the directory
+  # holding the Gemfile, which is what Bundler writes them relative to.
   root ? null,
-  # Per-gem escape hatch for git sources: either a derivation/path used
-  # verbatim as `src`, or a function taking the gem's `source` attrset.
-  # Lets an offline or hermetic build swap builtins.fetchGit (which fetches at
-  # eval time and is not substitutable) for a fixed-output fetchgit.
+  # Replace the source of one git gem. Give a derivation or path to use as
+  # `src`, or a function that receives the gem's `source` and returns one.
+  #
+  # Use this to avoid builtins.fetchGit. It runs during evaluation, needs the
+  # network then, and no binary cache can serve its result. A fetchgit with a
+  # known hash has none of those limits.
   gemSrcOverrides ? { },
   ...
 }:
@@ -117,34 +119,28 @@ let
 
   # ── git and path sources ─────────────────────────────────────
   #
-  # These are built as `type = "gem"` with an explicit `src`, NOT with
-  # buildRubyGem's `type = "git"` / bundled-common's `pathDerivation`. Both of
-  # those are structurally incompatible with a plain buildEnv:
+  # We build git and path gems as `type = "gem"` with our own `src`. We do not
+  # use buildRubyGem's `type = "git"`. Three reasons:
   #
-  #   - `type = "git"` installs via nix-bundle-install.rb, which puts the gem
-  #     under bundler/gems/<name>-<rev> with no specifications/*.gemspec, so
-  #     RubyGems cannot see it through GEM_PATH. Only the nix-support
-  #     setup-hook or Bundler.setup reaches it -- and buildEnv drops
-  #     nix-support outright (build-support/buildenv/builder.pl). Switching to
-  #     it requires binstubs (TODO #10) first.
-  #   - `type = "git"` also demands source.sha256, which a Gemfile.lock does
-  #     not contain.
-  #   - `pathDerivation` is a fake derivation whose outPath is the raw source
-  #     dir; its lib/ would land at $out/lib, not on GEM_PATH.
+  #   1. `type = "git"` installs the gem into bundler/gems/ and writes no
+  #      specifications/*.gemspec. RubyGems finds gems through GEM_PATH, and it
+  #      needs that file. So `require` fails.
+  #   2. A setup-hook can find such a gem instead. But buildEnv deletes the
+  #      nix-support directory, and the hook lives there.
+  #   3. `type = "git"` also needs a sha256. A Gemfile.lock has no such field.
   #
-  # buildRubyGem's `src` is `attrs.src or (...)`, so supplying it bypasses the
-  # fetcher and never forces attrs.source. With a directory src, unpackPhase
-  # falls through to stdenv's and re-enables buildPhase, giving us the standard
-  # `gem build` + `gem install` layout. See TODO #13.
+  # When we pass `src`, buildRubyGem skips its own fetcher. A directory `src`
+  # then unpacks the normal stdenv way, and the gem builds and installs.
   mkGemSrc =
     gem:
     if gem.source.type == "git" then
       builtins.fetchGit (
         {
           inherit (gem.source) url rev;
-          # A locked revision is frequently not a branch tip, and not every git
-          # server enables uploadpack.allowAnySHA1InWant. Costs a full-refs
-          # fetch; the output path is determined by rev either way.
+          # A locked revision is often not the tip of a branch. Some git
+          # servers refuse to send such a revision on its own. Fetch every ref
+          # to get it. The revision alone decides the result, so this costs
+          # only fetch time.
           allRefs = true;
         }
         // lib.optionalAttrs gem.source.fetchSubmodules { submodules = true; }
@@ -152,12 +148,13 @@ let
     else
       gem.source.path;
 
-  # A gemSrcOverrides entry naming a gem with no git/path source does nothing.
-  # Silently ignoring it would defeat the argument's entire purpose (a typo in
-  # a hermetic build's override means fetchGit runs at eval anyway), so refuse.
-  # Checked against every git/path gem in the lockfile, not just the ones that
-  # survived group/platform filtering, so an override for a test-group gem in
-  # a production build is not an error.
+  # An override for a gem with no git or path source does nothing. If we ignore
+  # it, a user who misspells a gem name still gets the network fetch they were
+  # trying to avoid. So we refuse instead.
+  #
+  # We compare against every git and path gem in the lockfile, not against the
+  # gems left after we filter by group and platform. An override for a
+  # test-group gem in a production build is then still valid.
   sourcedGemNames = builtins.map (g: g.gemName) (
     builtins.filter (g: g.source.type != "gem") gemMetadata
   );
@@ -170,18 +167,18 @@ let
     else
       true;
 
-  # buildRubyGem defaults `ruby` to the one callPackage handed it, so without
-  # threading ours through, a user-supplied `ruby` argument was accepted and
-  # then silently ignored. Identical derivation when it is the default.
+  # buildRubyGem uses its own ruby unless we give it one. Without this, the
+  # `ruby` argument above would be accepted and then ignored. A per-gem `ruby`
+  # from gemConfig still wins.
   buildGem =
     attrs:
     if attrs.source.type == "gem" then
-      buildRubyGem (attrs // { inherit ruby; })
+      buildRubyGem (attrs // { ruby = attrs.ruby or ruby; })
     else
       buildRubyGem (
         attrs
         // {
-          inherit ruby;
+          ruby = attrs.ruby or ruby;
           type = "gem";
           src =
             if gemSrcOverrides ? ${attrs.gemName} then
@@ -191,13 +188,14 @@ let
               if builtins.isFunction override then override attrs.source else override
             else
               mkGemSrc attrs;
-          # applyGemConfigs has already run, so compose rather than clobber:
-          # a user gemConfig entry's preBuild is kept and ours appended.
+          # applyGemConfigs runs before this, so add to what the user set
+          # instead of replacing it.
           nativeBuildInputs = (attrs.nativeBuildInputs or [ ]) ++ [ gitMinimal ];
-          # Load-bearing, not decorative: gemspecs commonly compute spec.files
-          # via `git ls-files`, and neither builtins.fetchGit output nor a store
-          # copy of a path source has a .git. Without an index the gem builds
-          # successfully and ships zero files.
+          # Many gemspecs list their files with `git ls-files`. Neither a
+          # fetchGit result nor a copied path source has a .git directory, so
+          # that command returns nothing. The gem then builds without error and
+          # contains no files at all. Make a throwaway repository to prevent
+          # this.
           preBuild = ''
             ${attrs.preBuild or ""}
             if [ ! -d .git ]; then
@@ -205,10 +203,8 @@ let
               git add -A
             fi
           '';
-          # ...and because that failure mode is silent, assert the gem actually
-          # installed something RubyGems can find.
-          # $GEM_HOME is exported by buildRubyGem's own installPhase, so this
-          # tracks whichever ruby actually did the install.
+          # An empty gem gives no error until someone calls `require`. Check
+          # here instead. buildRubyGem sets $GEM_HOME before this runs.
           postInstall = ''
             ${attrs.postInstall or ""}
             gems4nixSpec="$GEM_HOME/specifications/${attrs.gemName}-${attrs.version}.gemspec"

@@ -545,9 +545,10 @@ let
   # build dep not in any Gemfile group) and filterGroup drops it.
   # This causes: "Could not find 'mini_portile2' (~> 2.8.2)"
   #
-  # This pins the BUGGY behaviour so the suite can gate CI. It is not the
-  # behaviour we want: when TODO #5 lands, invert the second assertion and
-  # rename this back to test_ruby_only_nokogiri_keeps_build_deps.
+  # This test records what the code does today, which is wrong. A test that
+  # asks for the fix would fail forever, and then CI could never use this file.
+  # When someone fixes the drop, reverse the second assertion and rename this
+  # to test_ruby_only_nokogiri_keeps_build_deps.
 
   test_ruby_only_nokogiri_drops_build_deps =
     let
@@ -578,8 +579,8 @@ let
     in
     # nokogiri must resolve to ruby (only variant available)
     assertEq "ruby-only nokogiri: resolves to ruby platform" resolved.nokogiri.platform "ruby"
-    # mini_portile2 SHOULD survive filtering (nokogiri needs it to compile) but
-    # is dropped today: TODO #5.
+    # nokogiri needs mini_portile2 to compile, so it should survive. It does
+    # not: it belongs to no group, and the group filter drops it.
     &&
       assertEq "ruby-only nokogiri: mini_portile2 dropped by filterGroup (TODO #5)"
         (builtins.elem "mini_portile2" names)
@@ -587,9 +588,9 @@ let
 
   # ── git and path sourced gems ────────────────────────────────
   #
-  # GIT/PATH spec lines carry no platform suffix, so these gems always land on
-  # platform "ruby" and must survive filtering on every supported system. The
-  # filter helpers never inspect `source`, so it must pass through untouched.
+  # A GIT or PATH spec line carries no platform suffix, so these gems are
+  # always platform "ruby" and pass the filter on every system. The filter
+  # helpers never read `source`, so it arrives unchanged.
 
   gitGem = mkGem {
     gemName = "errgonomic";
@@ -645,11 +646,11 @@ let
     && assertEq "resolvePlatforms: git source survives resolution" result.errgonomic.source.type "git"
     && assertEq "resolvePlatforms: path source survives resolution" result.hello_gem.source.type "path";
 
-  # Documented current behaviour, not desired behaviour: a gem whose group set
-  # is empty is dropped. Top-level git/path gems always get ["default"] from
-  # gem-groups.rb (verified against examples/complex), so this does not bite
-  # them today, but a transitively-reached git gem that gem-groups.rb misses
-  # would vanish silently. That is TODO #5, tracked separately.
+  # Another record of current behaviour: the filter drops a gem that belongs
+  # to no group. A git or path gem named in the Gemfile gets the "default"
+  # group, so this does not affect one today. A git gem reached only through
+  # another gem's dependencies can miss out, and then it disappears with no
+  # error. The same bug as the nokogiri case above.
   test_filterGroup_git_gem_without_groups =
     let
       orphanGitGem = gitGem // {

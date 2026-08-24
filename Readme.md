@@ -116,9 +116,9 @@ real and worth knowing:
   };
   ```
 
-Path remotes are resolved relative to the Gemfile's directory. Pass `root` when
-that isn't where the path gems live — most often a Gemfile generated into the
-store with `writeText`, whose `dirOf` is `/nix/store`:
+Path remotes resolve against the Gemfile's directory. Pass `root` when the
+path gems live somewhere else. The usual case is a Gemfile written into the
+store with `writeText`, whose directory is `/nix/store`:
 
 ```nix
 gemfileEnv {
@@ -131,8 +131,8 @@ gemfileEnv {
 
 `root` must be a Nix **path**, not a string: `..` and `.` in a remote are
 normalised by path arithmetic, and a string wouldn't be copied into the store.
-A path gem's source still has to be reachable from the flake — `remote:
-../shared/mygem` only works if that directory is inside the flake's source
+A path gem's source must also be reachable from the flake. A `remote:
+../shared/mygem` works only when that directory sits inside the flake's source
 tree. A missing one is an evaluation error naming `root`, not a silent skip.
 
 Known limitations, stated rather than implied:

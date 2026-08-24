@@ -207,10 +207,9 @@ the less we maintain and the more we benefit from upstream fixes.
 
 13. **Git and path sources: done, but NOT via `type = "git"`.**
     The `GIT` and `PATH` lockfile sections are parsed and their gems built.
-    The original plan here — hand them to `buildRubyGem` as `type = "git"`
-    and to `pathDerivation` — was investigated and rejected. Both are
-    structurally incompatible with our environment model. **Read this before
-    "fixing" it back.**
+    The original plan was to hand them to `buildRubyGem` as `type = "git"`
+    and to `pathDerivation`. We tried both and rejected both. Neither fits the
+    way we build the environment. **Read this before you "fix" it back.**
 
     We build them as `type = "gem"` with an explicit `src`: a
     `builtins.fetchGit` result, or the resolved store path. `buildRubyGem`'s
@@ -224,10 +223,10 @@ the less we maintain and the more we benefit from upstream fixes.
 
     - It installs via `nix-bundle-install.rb`, which drives
       `Bundler::Source::Git#install`. That lands the gem in
-      `GEM_HOME/bundler/gems/<name>-<shortrev>` and — per bundler's
-      `source/path/installer.rb`, whose `post_install` builds extensions and
-      generates binstubs but never calls `write_spec` — with **no
-      `specifications/*.gemspec`**. RubyGems cannot find it via `GEM_PATH`.
+      `GEM_HOME/bundler/gems/<name>-<shortrev>` with **no
+      `specifications/*.gemspec`**. Bundler's `source/path/installer.rb` is
+      why: its `post_install` builds extensions and generates binstubs, and
+      never calls `write_spec`. RubyGems cannot find the gem via `GEM_PATH`.
       Only `Bundler.setup` or the `nix-support/setup-hook` reaches it.
     - That setup-hook does not survive us: `buildEnv` drops `nix-support`
       outright (`pkgs/build-support/buildenv/builder.pl`, the
@@ -242,17 +241,18 @@ the less we maintain and the more we benefit from upstream fixes.
     Why not `pathDerivation`: it returns a fake derivation whose `outPath` is
     the raw source directory. `bundlerEnv` makes that work with
     `pathsToLink = ["/lib"]`, `confFiles` and binstubs. We have none of those,
-    so the gem's `lib/hello_gem.rb` would land at `$out/lib/hello_gem.rb` —
-    not on `GEM_PATH`, not on `$LOAD_PATH`. (`type = "url"` is not an
+    so the gem's `lib/hello_gem.rb` would land at `$out/lib/hello_gem.rb`.
+    That is on neither `GEM_PATH` nor `$LOAD_PATH`. (`type = "url"` is not an
     alternative either: `nix-bundle-install.rb` path mode copies nothing into
     `$out`.)
 
-    One more load-bearing detail: the `preBuild` that runs `git init && git
-    add -A` is **not** decorative. Gemspecs commonly compute `spec.files` via
-    `git ls-files`, and neither `builtins.fetchGit` output nor a store copy
-    has a `.git`. Without it the gem builds fine and ships zero files, and you
-    find out at `require` time. The `postInstall` assertion (gemspec present,
-    gem directory non-empty) exists to make that failure loud.
+    One more detail that matters: the `preBuild` runs `git init && git add
+    -A`, and the build needs it. Many gemspecs list `spec.files` with `git
+    ls-files`. Neither a `builtins.fetchGit` result nor a store copy has a
+    `.git` directory, so that command returns nothing. The gem then builds
+    without error and contains no files, and you learn this from a `require`
+    much later. The `postInstall` check looks for the gemspec and for a
+    non-empty gem directory, so the build fails instead.
 
     **Still missing:**
     - Git gems with native extensions will fail — they need `gemPath` for

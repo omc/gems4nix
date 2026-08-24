@@ -49,14 +49,13 @@ let
     in
     takeUntilEmpty.lines;
 
-  # parse the "NAME (VERSION[-PLATFORM])" half of a spec or checksum line.
-  # Leading indentation is ignored here; callers that care about indent depth
-  # (parseSectionBody) discriminate before calling.
-  #   "    errgonomic (0.5.1)"        -> { gemName = "errgonomic"; version = "0.5.1"; platform = "ruby"; }
-  #   "    ffi (1.17.3-arm64-darwin)" -> platform = "arm64-darwin"
+  # Parse the "NAME (VERSION[-PLATFORM])" part of a spec or checksum line.
+  #   "    errgonomic (0.5.1)"        -> version "0.5.1",  platform "ruby"
+  #   "    ffi (1.17.3-arm64-darwin)" -> version "1.17.3", platform "arm64-darwin"
   #
-  # Version/platform split matches Bundler's NAME_VERSION regex: the version is
-  # everything up to the first hyphen, the platform is the rest.
+  # This ignores leading spaces. Callers that need the indent depth must check
+  # it first. The version ends at the first hyphen and the platform is the
+  # rest, which is how Bundler itself splits the two.
   parseSpecLine =
     line:
     let
@@ -108,7 +107,7 @@ let
         else
           true;
 
-      # the NAME (VERSION[-PLATFORM]) half is shared with GIT/PATH spec lines
+      # the same NAME (VERSION) shape that GIT and PATH spec lines use
       spec = parseSpecLine line;
 
       rawHash = builtins.elemAt parts 2;
@@ -163,14 +162,17 @@ let
 
   # ── GIT / PATH sections ──────────────────────────────────────
 
-  # Split a GIT/PATH section body (the output of takeLines) into its option
-  # headers and its 4-space spec lines.
+  # Split the body of a GIT or PATH section into its options and its gems.
   #
-  # Bundler's grammar allows 2, 4 or 6 leading spaces: 2 = a section option,
-  # 4 = a spec, 6 = one of that spec's dependencies. parseGemSection ignores
-  # that distinction (see TODO #3) and would turn a dependency line into a
-  # phantom gem, so GIT/PATH sections get their own parser rather than
-  # reusing it.
+  # Bundler indents by 2, 4 or 6 spaces, and the depth is the only thing that
+  # gives a line its meaning:
+  #
+  #   2 spaces   an option, such as `remote:`
+  #   4 spaces   a gem this source provides
+  #   6 spaces   a dependency of the gem above it, provided by some other source
+  #
+  # A 6-space line names a gem that this source does not contain. Count the
+  # spaces, or such a line becomes a gem that nothing can build.
   #
   # Returns: { headers = { remote = "..."; ... }; specLines = [ ... ]; hasSpecs = bool; }
   parseSectionBody =
@@ -219,9 +221,9 @@ let
       inherit (result) headers specLines hasSpecs;
     };
 
-  # Keys we understand in a GIT section. Anything else throws rather than
-  # being silently ignored: an unrecognised option usually changes what
-  # source tree the gem is built from.
+  # Options we understand in a GIT section. An unknown option is an error,
+  # because most options change which files the gem is built from. To ignore
+  # one is to build the wrong thing.
   gitSectionKeys = [
     "remote"
     "revision"
@@ -245,9 +247,9 @@ let
     if !body.hasSpecs then
       throw "gems4nix: ${kind} section has no 'specs:' line"
     else if h ? glob then
-      # buildRubyGem's build phase picks the first *.gemspec it finds, so it
-      # cannot honour a glob. A monorepo source would silently build the
-      # wrong gem.
+      # `glob:` selects one gemspec out of several in a repository.
+      # buildRubyGem always takes the first gemspec it finds, so it cannot obey
+      # a glob, and it would build the wrong gem without saying so.
       throw
         "gems4nix: ${kind} sources with a 'glob:' option are not supported (remote: ${h.remote or "?"})"
     else if unknown != [ ] then
@@ -276,9 +278,8 @@ let
         ref = h.ref or null;
         branch = h.branch or null;
         tag = h.tag or null;
-        # Coerce explicitly. Any value other than "true" -- including the
-        # string "false", which is truthy in Nix's eyes if tested naively --
-        # must leave submodule fetching off.
+        # Compare against "true" by hand. The value here is a string, and the
+        # string "false" is not false.
         submodules = (h.submodules or "false") == "true";
         gems = lib.lists.map parseSpecLine body.specLines;
       };
@@ -294,9 +295,9 @@ let
         allowedKeys = [ "remote" ];
       };
     in
-    # seq so validateSection's throws fire on WHNF rather than only when a
-    # caller happens to force `remote`. parseGitSection gets this for free
-    # (its body is an `if` on a header), this one does not.
+    # `seq` makes the checks above run as soon as anyone looks at the result.
+    # Without it they wait for a caller to read `remote`, and a bad section can
+    # pass through unchecked.
     builtins.seq h {
       inherit (h) remote;
       gems = lib.lists.map parseSpecLine body.specLines;
@@ -334,9 +335,9 @@ let
       gemSectionLines = lib.lists.map (i: takeLines i lines) gemSectionIndices;
       gemSections = lib.lists.map parseGemSection gemSectionLines;
 
-      # GIT / PATH sections. Deliberately NOT fed into buildGemRemotes: that
-      # is first-writer-wins and Bundler emits GIT/PATH before GEM, so a
-      # leaked entry would silently shadow a gem's real rubygems.org remote.
+      # Keep these out of buildGemRemotes. It keeps the first remote it sees
+      # for a gem, and Bundler writes GIT and PATH sections before GEM ones. An
+      # entry that leaked in would replace a gem's real rubygems.org remote.
       gitSections = lib.lists.map (i: parseGitSection (takeLines i lines)) (
         findIndices (l: l == "GIT") lines
       );
@@ -350,12 +351,12 @@ let
         else
           true;
 
-      # Every hashless CHECKSUMS entry must be accounted for by a GIT or PATH
-      # section. Anything left over would be dropped from the environment and
-      # only surface as a LoadError at runtime.
-      # Matched by name, not name+version: Bundler never emits a hashless entry
-      # whose version disagrees with its source section, so checking the version
-      # too would only add a failure mode for hand-edited lockfiles.
+      # A CHECKSUMS entry with no hash comes from a GIT or PATH section. If no
+      # such section claims it, we cannot build it, and the user learns this
+      # from a LoadError long afterwards. Fail here instead.
+      #
+      # Names are enough to match on. Bundler never writes a version here that
+      # disagrees with the source section.
       sourcedNames = lib.lists.map (g: g.gemName) (
         lib.lists.concatMap (s: s.gems) (gitSections ++ pathSections)
       );
@@ -443,13 +444,13 @@ let
             type = "git";
             url = section.remote;
             rev = section.revision;
-            # gemset.nix spells this fetchSubmodules, not submodules; matching
-            # upstream's key keeps TODO #11 (toGemset interop) cheap.
+            # nixpkgs calls this fetchSubmodules in its gemset.nix files. Use
+            # the same name, so we can emit that format later without a rename.
             fetchSubmodules = section.submodules;
-            # Recorded, but deliberately not fed to the fetcher: builtins.fetchGit
-            # output is determined by rev alone (verified: adding ref/allRefs
-            # yields an identical store path), so these only ever affect fetch
-            # strategy. They exist for gemset.nix interop and future tuning.
+            # We keep these but never fetch by them. The revision alone
+            # decides which source we get: a fetch that adds a ref or a branch
+            # returns the identical store path. They are here to describe the
+            # source, not to find it.
             inherit (section) ref branch tag;
           };
         }) section.gems
@@ -466,10 +467,10 @@ let
           groups = groupsFor gem.gemName;
           source = {
             type = "path";
-            # Single concatenation on purpose: Nix normalises "/.." and "/."
-            # only when appended in one step, so `remote: .` and
-            # `remote: ../shared` resolve correctly. Splitting this into
-            # (pathRoot + "/") + remote would produce a literal "/." component.
+            # Add the whole suffix in one step. Nix resolves "." and ".."
+            # only when it joins a path to a complete string, so a remote of
+            # "." or "../shared" needs this form. Two steps, as in
+            # (pathRoot + "/") + remote, leave a literal "/." in the path.
             path = pathRoot + "/${section.remote}";
           };
         }) section.gems
@@ -479,9 +480,9 @@ let
       sourcedNames = lib.lists.map (g: g.gemName) sourced;
       checksumNames = lib.lists.map (g: g.gemName) checksumSection;
 
-      # A name may legitimately repeat inside checksumSection (one entry per
-      # platform variant), but a git/path gem is a single derivation: it must
-      # not collide with a rubygems entry or with another git/path section.
+      # A name repeats inside checksumSection once per platform, which is
+      # correct. A git or path gem is one build, so its name must appear once.
+      # Two sources for one name means we cannot tell which the user wants.
       collisions =
         builtins.filter (n: builtins.elem n checksumNames) sourcedNames
         ++ builtins.attrNames (
