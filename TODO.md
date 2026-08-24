@@ -52,6 +52,12 @@
    `test_ruby_only_nokogiri_drops_build_deps`, which asserts the *wrong*
    current behaviour so the suite can gate CI. Invert it and rename it back to
    `..._keeps_build_deps` when this is fixed.
+
+   **Pending test:** `test/unit/test-pending.nix` →
+   `test_transitive_git_gem_survives_group_filter` asserts the behaviour we
+   want and fails today. It covers the git-gem form of this bug: a git gem
+   reached only through another gem's dependency list gets no groups and
+   disappears.
    `test_filterGroup_git_gem_without_groups` pins the same bug for a
    git-sourced gem: a transitively-reached git gem that `gem-groups.rb` misses
    would still vanish silently. Top-level git/path gems get `["default"]`, so
@@ -121,6 +127,12 @@ the less we maintain and the more we benefit from upstream fixes.
 
    **Action:** Use `composeGemAttrs` or replicate its `gemPath` logic to
    wire up inter-gem build dependencies.
+
+   **Pending test:** `test/unit/test-pending.nix` →
+   `test_git_section_records_dependencies`. `gemPath` needs a list of each
+   gem's dependencies and we keep none, so that test asks for the missing
+   half first: the lockfile already names them on the 6-space lines under
+   every gem, and `parseGitSection` currently discards them. See #12 and #14.
 
    **Confirmed regression (grpc):** `defaultGemConfig` has a `grpc` entry
    with `postPatch` / `substituteInPlace Makefile` intended for source
@@ -271,8 +283,14 @@ the less we maintain and the more we benefit from upstream fixes.
     - Only verified against GitHub. `allRefs = true` is the hedge for servers
       that don't set `uploadpack.allowAnySHA1InWant`.
     - A `gemConfig` entry that sets `src`, `unpackPhase` or `buildPhase` on a
-      git/path gem will fight our wrapper. Only `preBuild`, `postInstall` and
-      `nativeBuildInputs` are composed; everything else is last-writer-wins.
+      git/path gem will fight our wrapper. Only `preBuild`, `postInstall`,
+      `nativeBuildInputs` and `ruby` are composed; everything else is
+      last-writer-wins. Pending test:
+      `test_gemconfig_cannot_replace_src_of_a_git_gem`, which asks for a throw
+      rather than a merge. Two definitions of `src` have no sensible merge.
+    - Non-GitHub git servers and the evaluation-time fetch have no test. Both
+      are recorded under `nonTests` in `test/unit/test-pending.nix` with the
+      reason and what an integration test would need.
 
 14. **The dependency graph is in the lockfile; `gem-groups.rb` is redundant.**
     The `specs:` subsection of each `GEM` block lists every gem's direct

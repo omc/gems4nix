@@ -94,6 +94,38 @@ pointer to the TODO entry and instructions to invert them when it lands.
 `test_ruby_only_nokogiri_drops_build_deps` (TODO #5) and
 `test_filterGroup_git_gem_without_groups` are both of this kind.
 
+### Pending tests (`test/unit/test-pending.nix`)
+
+The other half of that pair. A pending test asserts the behaviour we want,
+fails today, and carries a comment saying what a fix would change. Together
+they describe a limitation from both sides: the characterization test holds the
+current behaviour still so CI can gate on it, and the pending test says where
+the code should go.
+
+Pending tests are in their own file and belong to no `allTests` conjunction, so
+nothing runs them by accident. `nix flake check` and CI never see them.
+
+```sh
+# list them
+nix eval --file test/unit/test-pending.nix --apply 'x: builtins.attrNames x.pending'
+
+# run one; it is expected to fail
+nix eval --file test/unit/test-pending.nix pending.test_git_section_records_dependencies
+
+# limitations that have no test, and why
+nix eval --file test/unit/test-pending.nix nonTests --json
+```
+
+To promote one: make it pass, move it into the `allTests` conjunction of the
+file it belongs to, and delete the characterization test that pinned the old
+behaviour.
+
+The same file records limitations that no test can reach, under `nonTests`.
+Each entry says what the limitation is, why a test cannot capture it, and what
+an integration test would need. Non-GitHub git servers and evaluation-time
+fetching are both there: neither is a branch in our code, so neither has an
+assertion to make.
+
 ### Integration tests (`examples/`)
 
 Each example is a self-contained flake with a real Gemfile.lock (with
