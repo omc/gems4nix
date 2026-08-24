@@ -32,7 +32,8 @@ test/
 ├── test.nix                           # integration test (full Rails build)
 └── unit/
     ├── test-parser.nix                # unit tests for parser-helpers.nix
-    └── test-filter.nix                # unit tests for filter-helpers.nix
+    ├── test-filter.nix                # unit tests for filter-helpers.nix
+    └── test-pending.nix               # known limitations; fail today, never gated
 
 examples/
 ├── simple/                            # pure-ruby gems (rack, rake)
@@ -96,11 +97,11 @@ pointer to the TODO entry and instructions to invert them when it lands.
 
 ### Pending tests (`test/unit/test-pending.nix`)
 
-The other half of that pair. A pending test asserts the behaviour we want,
-fails today, and carries a comment saying what a fix would change. Together
-they describe a limitation from both sides: the characterization test holds the
-current behaviour still so CI can gate on it, and the pending test says where
-the code should go.
+The other half of that idea. A pending test asserts the behaviour we want,
+fails today, and carries a comment saying what a fix would change. Where a
+characterization test already pins the same limitation, the two describe it
+from both sides, and the pending test names its twin. Some limitations have no
+twin, because nothing useful pins them.
 
 Pending tests are in their own file and belong to no `allTests` conjunction, so
 nothing runs them by accident. `nix flake check` and CI never see them.
@@ -117,14 +118,15 @@ nix eval --file test/unit/test-pending.nix nonTests --json
 ```
 
 To promote one: make it pass, move it into the `allTests` conjunction of the
-file it belongs to, and delete the characterization test that pinned the old
-behaviour.
+file it belongs to, and delete the twin that pinned the old behaviour, if it
+names one. Read the whole comment first. Some fixes change the shape of a
+parsed gem, and the comment names the gating tests that must change with it.
 
 The same file records limitations that no test can reach, under `nonTests`.
 Each entry says what the limitation is, why a test cannot capture it, and what
 an integration test would need. Non-GitHub git servers and evaluation-time
-fetching are both there: neither is a branch in our code, so neither has an
-assertion to make.
+fetching are both there. Neither turns on a decision our code makes, so neither
+gives a pure test anything to assert.
 
 ### Integration tests (`examples/`)
 

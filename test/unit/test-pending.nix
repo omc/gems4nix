@@ -14,11 +14,11 @@
 # List them:
 #   nix eval --file test/unit/test-pending.nix --apply 'x: builtins.attrNames x.pending'
 #
-# The sibling files hold the opposite kind of test. `test-filter.nix` has
-# `test_ruby_only_nokogiri_drops_build_deps`, which asserts what the code does
-# today, wrong as it is, so the suite stays green and gates CI. The two work as
-# a pair: the sibling pins the current behaviour, and the test here describes
-# the fix. A fix flips both at once.
+# Some of these have a twin in a gating file that pins the current, wrong
+# behaviour so CI has something to run. `test-filter.nix` holds
+# `test_ruby_only_nokogiri_drops_build_deps`, the twin of the group-filter test
+# below. Where a twin exists, the comment here names it, and a fix flips both
+# at once. Not every limitation has one.
 
 let
   nixpkgs = import (fetchTarball {
@@ -60,20 +60,31 @@ in
     # the Gemfile is safe. A git gem reached only through another gem's
     # dependency list can miss out, and then `require` fails at runtime.
     #
+    # TWIN: test-filter.nix, test_ruby_only_nokogiri_drops_build_deps, which
+    # pins the drop this test wants removed.
+    #
     # THEORIZED FIX (TODO #12 and #14)
-    # Read the dependency edges out of the lockfile `specs:` blocks and keep
-    # any gem a wanted gem depends on, whatever groups it holds. nixpkgs does
-    # this in bundled-common/functions.nix with a fixpoint it calls converge.
-    # That also removes the need for gem-groups.rb.
+    # Add a step after the group filter that pulls back every gem a kept gem
+    # depends on, whatever groups it holds. nixpkgs does this in
+    # bundled-common/functions.nix with a fixpoint it calls converge. It needs
+    # dependency edges, which #12 and #14 add to the parsed gems. Parsing the
+    # DEPENDENCIES section as well (#14) is what then makes gem-groups.rb
+    # unnecessary.
+    #
+    # This test names that step `expandDependencies` and fails today because no
+    # such function exists. Do not make it pass by loosening `filterGroup` to
+    # keep every gem with no groups: that keeps orphans nothing depends on, and
+    # the point is to follow the edges.
     test_transitive_git_gem_survives_group_filter =
       let
-        # rails wants errgonomic; errgonomic is in no group because
-        # gem-groups.rb did not reach it.
+        # rails is wanted and depends on errgonomic. errgonomic belongs to no
+        # group, because gem-groups.rb never reached it.
         rails = {
           gemName = "rails";
           platform = "ruby";
           version = "8.1.2";
           groups = [ "default" ];
+          dependencies = [ "errgonomic" ];
           source = {
             type = "gem";
             sha256 = "aaaa";
@@ -85,15 +96,22 @@ in
           platform = "ruby";
           version = "0.5.1";
           groups = [ ];
+          dependencies = [ ];
           source = gitSource;
         };
 
-        platforms = platformsForSystem "aarch64-darwin";
-        afterGroup = builtins.filter (filterGroup [ "default" ]) [
+        allGems = [
           rails
           errgonomic
         ];
-        afterPlatform = builtins.filter (filterPlatform platforms) afterGroup;
+        platforms = platformsForSystem "aarch64-darwin";
+        afterGroup = builtins.filter (filterGroup [ "default" ]) allGems;
+
+        # The missing step. It takes every gem and the ones the group filter
+        # kept, and returns those plus everything they depend on.
+        expanded = filterHelpers.expandDependencies allGems afterGroup;
+
+        afterPlatform = builtins.filter (filterPlatform platforms) expanded;
         kept = builtins.attrNames (resolvePlatforms platforms afterPlatform);
       in
       assertEq "pending: a git gem reached through a dependency must survive the group filter"
@@ -115,6 +133,10 @@ in
     # `dependencies` list. default.nix can then map those names to the
     # derivations it already built and pass them as `gemPath`. This test asks
     # for the first half, which the second half needs.
+    #
+    # Adding the field changes the shape of a parsed gem, so two tests in
+    # test-parser.nix must change with it: `test_parseGitSection_basic` and
+    # `test_parsePathSection_basic` both compare `gems` for exact equality.
     test_git_section_records_dependencies =
       let
         result = parseGitSection [
@@ -131,23 +153,28 @@ in
       ) [ "concurrent-ruby" ];
 
     # LIMITATION
-    # buildGem in default.nix sets `src`, `preBuild` and `postInstall` on every
-    # git and path gem. A gemConfig entry that sets the same keys either
-    # replaces ours or gets replaced, and neither the user nor the build says
-    # so. The result is a gem built from the wrong source, or one built with no
-    # git index and therefore no files.
+    # buildGem in default.nix sets `src` on every git and path gem, and sets
+    # the phases that unpack and build it. A gemConfig entry that sets `src`,
+    # `unpackPhase` or `buildPhase` either replaces ours or gets replaced, and
+    # neither the user nor the build says so. The result is a gem built from
+    # the wrong source, or one built with no git index and therefore no files.
+    #
+    # `preBuild` and `postInstall` are not affected. The wrapper keeps a user
+    # value for those and adds its own after it.
     #
     # THEORIZED FIX
     # Refuse the combination. A gemConfig entry may not set `src`,
     # `unpackPhase` or `buildPhase` on a gem whose source is git or path,
     # because the wrapper owns how such a gem is fetched and unpacked. Throw
-    # and name both the gem and the key. Composition is the wrong answer here:
-    # two definitions of `src` have no sensible merge, and quietly choosing one
-    # is the failure we are trying to remove.
+    # and name both the gem and the key. Do not merge the two: two definitions
+    # of `src` have no sensible middle, and quietly picking one is the failure
+    # we are removing.
     #
-    # `preBuild` and `postInstall` stay allowed. The wrapper already keeps a
-    # user value for those and adds its own after it.
-    test_gemconfig_cannot_replace_src_of_a_git_gem =
+    # Put the guard in `applyGemConfigs`. It is the one pure function that sees
+    # both the gem's `source` and the config entry's output, so a test can
+    # reach it without nixpkgs. A guard inside buildGem would fix the bug too,
+    # but this test would stay red, and the next reader would think it broken.
+    test_gemconfig_cannot_take_over_a_git_gem_build =
       let
         errgonomic = {
           gemName = "errgonomic";
@@ -156,15 +183,24 @@ in
           groups = [ "default" ];
           source = gitSource;
         };
-        hostileConfig = {
-          errgonomic = attrs: {
-            src = "/some/other/tree";
-          };
+        configSetting = key: value: {
+          errgonomic = attrs: { ${key} = value; };
         };
       in
       assertThrows "pending: a gemConfig entry must not replace the src of a git gem" (
-        applyGemConfigs hostileConfig errgonomic
-      );
+        applyGemConfigs (configSetting "src" "/some/other/tree") errgonomic
+      )
+      && assertThrows "pending: a gemConfig entry must not replace the unpackPhase of a git gem" (
+        applyGemConfigs (configSetting "unpackPhase" "true") errgonomic
+      )
+      && assertThrows "pending: a gemConfig entry must not replace the buildPhase of a git gem" (
+        applyGemConfigs (configSetting "buildPhase" "true") errgonomic
+      )
+      # ...and the keys the wrapper composes must keep working.
+      &&
+        assertEq "pending: a gemConfig entry may still set preBuild on a git gem"
+          (applyGemConfigs (configSetting "preBuild" "echo hi") errgonomic).preBuild
+          "echo hi";
   };
 
   # Limitations with no test. Each says why, and what a test would need.
@@ -181,10 +217,15 @@ in
       around this, and it is what we do. Only GitHub has been tried.
 
       WHY NO TEST
-      The answer depends on the server, not on our code. A test would need a
-      real GitLab, Gitea and Forgejo host, each with a gem whose locked
-      revision sits behind the branch tip, and the network to reach them. Pure
-      evaluation cannot see any of that, and a fake would only test the fake.
+      Whether a given server serves such a revision is the server's behaviour,
+      not ours. A test would need a real GitLab, Gitea and Forgejo host, each
+      with a gem whose locked revision sits behind the branch tip, and the
+      network to reach them. Pure evaluation cannot see any of that, and a fake
+      would only test the fake.
+
+      Our own part is one line: `allRefs = true` in mkGemSrc. A pure test could
+      pin it if mkGemSrc took its fetcher as an argument. That would prove we
+      ask for every ref, not that asking is enough.
 
       WHAT A TEST WOULD LOOK LIKE
       A NixOS VM test for each server: start the server, push a gem repository,
