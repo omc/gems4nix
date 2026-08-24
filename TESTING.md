@@ -68,16 +68,31 @@ Shared assertion functions (`assertEq`, `assertThrows`) live in
 Fast, pure Nix, no network or build. Test individual functions with
 synthetic inputs.
 
-- **`test-parser.nix`** -- `findIndices`, `takeLines`, `parseChecksumLine`,
-  `parseGemSection`, `parseLockfileContent`, `buildGemRemotes`,
-  `mergeGemMetadata`. Includes tests for malformed input (missing hash,
-  extra whitespace, missing sections) and git/path gem handling (hashless
-  checksum lines return null).
+- **`test-parser.nix`** -- `findIndices`, `takeLines`, `parseSpecLine`,
+  `parseChecksumLine`, `parseGemSection`, `parseSectionBody`,
+  `parseGitSection`, `parsePathSection`, `parseLockfileContent`,
+  `buildGemRemotes`, `mergeGemMetadata`. Includes tests for malformed input
+  (missing hash, extra whitespace, missing sections), the GIT/PATH grammar
+  (4-space specs vs 6-space dependency lines, `tag:`/`ref:`/`submodules:`,
+  `glob:` and unknown keys throwing), and the anti-silent-skip guards: a
+  hashless `CHECKSUMS` entry no GIT/PATH section explains, a `PLUGIN SOURCE`
+  section, and GIT/PATH entries leaking into `buildGemRemotes`.
 
 - **`test-filter.nix`** -- `filterGroup`, `filterPlatform`,
   `resolvePlatforms`, `applyGemConfigs`, `platformsForSystem`. Includes
   preference ranking tests (exact arch > compatible > ruby), shadowing bug
-  regression, and system-to-platform mapping for all four supported systems.
+  regression, system-to-platform mapping for all four supported systems, and
+  characterization tests proving git/path gems pass through the filters
+  untouched.
+
+### Characterization vs aspirational tests
+
+A test that asserts behaviour we want but do not have is red forever, which
+means it can never gate CI. Known bugs are pinned as *passing* tests that
+assert the current wrong behaviour, named and commented to say so, with a
+pointer to the TODO entry and instructions to invert them when it lands.
+`test_ruby_only_nokogiri_drops_build_deps` (TODO #5) and
+`test_filterGroup_git_gem_without_groups` are both of this kind.
 
 ### Integration tests (`examples/`)
 
@@ -90,12 +105,17 @@ native extension works, and exits nonzero on failure.
 |-----------|------|-------------------|
 | `simple`  | 2 | Basic pipeline: parse, filter, build, load |
 | `medium`  | 5 | Native platform variants, group filtering, `defaultGemConfig` |
-| `complex` | 60+ | Full Rails, git/path sources (SKIP until implemented), transitive deps |
+| `complex` | 60+ | Full Rails, git and path sources, transitive deps |
 
-The complex example's `validate.rb` uses `rescue LoadError` to SKIP
-git/path source gems rather than failing. When TODO #13 is implemented,
-those lines will start printing `OK` instead of `SKIP`, no test changes
-needed.
+The complex example is the integration test for git and path sources.
+`validate.rb` used to `rescue LoadError` and print SKIP for `errgonomic` (GIT)
+and `hello_gem` (PATH), which codified the parser's silent skip as expected
+behaviour. That tolerance is gone: both must load or the check fails.
+
+Note that `nix flake check` in `examples/complex` performs a real network fetch
+at **evaluation** time, because `builtins.fetchGit` resolves the git gem's
+revision during eval. It needs network access and is not served by a binary
+cache.
 
 ### Integration test (`test/test.nix`)
 
@@ -155,3 +175,15 @@ echo "all tests still pass"
 
 Each `nix eval` returns `true` on success or throws an assertion error with a
 descriptive message on failure. No external test harness needed.
+
+## CI
+
+`.github/workflows/ci.yml` runs three jobs on `x86_64-linux`: the root
+`nix flake check`, both unit test files, and a matrix over the three examples.
+
+The unit tests are not exposed as root-flake `checks` because they import
+nixpkgs through an unpinned `fetchTarball`, which pure flake evaluation
+rejects. The examples are not either: each is a standalone flake whose
+`gems4nix` input is `path:../..`, so pulling them into the root flake would be
+a self-referential cycle. CI therefore runs the same commands documented above,
+directly.

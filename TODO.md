@@ -26,12 +26,15 @@
    in `parser-helpers.nix` acknowledges this, but the current behavior is
    silently arbitrary rather than loudly wrong.
 
-4. **No support for git or path sources.**
-   Gems sourced from git repos or local paths are gracefully skipped by the
-   parser (their hashless checksum lines return null) but are not included
-   in the built environment. The `examples/complex/` integration test
-   documents this: `errgonomic` (git) and `hello_gem` (path) print SKIP
-   rather than OK. See also #13.
+   `parseGemSection` also reads only `lines[0]` for the remote and treats
+   everything from index 2 as a gem name, so a section with two `remote:`
+   lines misparses. `parseSectionBody` (added for GIT/PATH) already handles
+   repeated keys and indent depth correctly and would make this fix cheap.
+
+4. ~~**No support for git or path sources.**~~ **Done** (see #13 for how, and
+   for what is still missing). GIT and PATH sections are parsed and built.
+   A hashless `CHECKSUMS` line that no GIT/PATH section explains is now an
+   evaluation error rather than a silent drop.
 
 ### Filtering and Building (`default.nix`)
 
@@ -45,9 +48,14 @@
 
    Error: `Could not find 'mini_portile2' (~> 2.8.2)` during nokogiri build.
 
-   **Regression test:** `test/unit/test-filter.nix` →
-   `test_ruby_only_nokogiri_keeps_build_deps` (currently fails, documenting
-   the bug).
+   **Pinned in:** `test/unit/test-filter.nix` →
+   `test_ruby_only_nokogiri_drops_build_deps`, which asserts the *wrong*
+   current behaviour so the suite can gate CI. Invert it and rename it back to
+   `..._keeps_build_deps` when this is fixed.
+   `test_filterGroup_git_gem_without_groups` pins the same bug for a
+   git-sourced gem: a transitively-reached git gem that `gem-groups.rb` misses
+   would still vanish silently. Top-level git/path gems get `["default"]`, so
+   this does not bite the examples today.
 
    **Fix options:**
    - Parse the dependency graph from the lockfile `specs:` section (see #12,
@@ -59,11 +67,12 @@
 
 ### General
 
-6. **No CI or automated test invocation.**
-   Unit tests run via `nix eval`. Integration tests run via
-   `nix flake check` in each `examples/` subdirectory. Neither is wired
-   into CI yet. A top-level `nix flake check` that runs everything would
-   be the next step.
+6. ~~**No CI or automated test invocation.**~~ **Done.**
+   `.github/workflows/ci.yml` runs the root `nix flake check`, both unit test
+   files, and a matrix over the three examples. Not a single top-level
+   `nix flake check`: the unit tests use an unpinned `fetchTarball` (illegal
+   under pure flake eval) and the examples take `path:../..` as an input,
+   which would be a cycle. See TESTING.md.
 
 7. **`gem-groups.rb` group propagation may over-propagate.**
    The Ruby script iterates all specs and propagates groups through
@@ -167,6 +176,13 @@ the less we maintain and the more we benefit from upstream fixes.
     converts our internal representation to the `gemset.nix` format. This
     also serves as a migration path and compatibility layer.
 
+    **Known gap for git sources.** Our `source` attrset for a git gem uses
+    upstream's key names (`url`, `rev`, `fetchSubmodules`) and additionally
+    records `ref` / `branch` / `tag`, but it has no `sha256`. A Gemfile.lock
+    does not contain one and we structurally cannot produce one without
+    fetching. Anything consuming our output as a `gemset.nix` will need to
+    supply it or use a different fetcher.
+
 12. **Transitive dependency expansion is missing.**
     `bundled-common/functions.nix` has a `converge` fixpoint that expands
     group-filtered gems to include their transitive dependencies (even if
@@ -189,27 +205,74 @@ the less we maintain and the more we benefit from upstream fixes.
     group assignment. This also lets us drop the Ruby `runCommand` for
     group extraction if we parse DEPENDENCIES from the lockfile directly.
 
-13. **`buildRubyGem` can handle git and path sources natively.**
-    `buildRubyGem` already supports `type = "git"` (via
-    `nix-bundle-install.rb`, which monkey-patches Bundler to install from a
-    git checkout) and path sources (via `pathDerivation` in
-    `bundled-common/functions.nix`). We don't need to implement these from
-    scratch; we just need to parse the `GIT` and `PATH` sections of the
-    lockfile and pass the right attributes.
+13. **Git and path sources: done, but NOT via `type = "git"`.**
+    The `GIT` and `PATH` lockfile sections are parsed and their gems built.
+    The original plan here — hand them to `buildRubyGem` as `type = "git"`
+    and to `pathDerivation` — was investigated and rejected. Both are
+    structurally incompatible with our environment model. **Read this before
+    "fixing" it back.**
 
-    The lockfile format for git sources is:
-    ```
-    GIT
-      remote: https://github.com/user/repo.git
-      revision: abc123
-      specs:
-        gemname (1.0.0)
-    ```
+    We build them as `type = "gem"` with an explicit `src`: a
+    `builtins.fetchGit` result, or the resolved store path. `buildRubyGem`'s
+    `src` is `attrs.src or (...)`, so supplying it bypasses the fetcher and
+    never forces `attrs.source`. With a directory `src`, `unpackPhase`'s
+    `*.gem` test fails, it falls through to stdenv's `unpackPhase` and
+    re-enables `buildPhase`, so we get `gem build` + `gem install` and a
+    standard RubyGems layout that plain `GEM_PATH` can see.
 
-    **Action:** Parse `GIT` and `PATH` sections alongside `GEM` sections.
-    For git sources, set `source.type = "git"`, `source.url`, `source.rev`.
-    For path sources, set `source.type = "path"`, `source.path`.
-    `buildRubyGem` handles the rest.
+    Why not `type = "git"`:
+
+    - It installs via `nix-bundle-install.rb`, which drives
+      `Bundler::Source::Git#install`. That lands the gem in
+      `GEM_HOME/bundler/gems/<name>-<shortrev>` and — per bundler's
+      `source/path/installer.rb`, whose `post_install` builds extensions and
+      generates binstubs but never calls `write_spec` — with **no
+      `specifications/*.gemspec`**. RubyGems cannot find it via `GEM_PATH`.
+      Only `Bundler.setup` or the `nix-support/setup-hook` reaches it.
+    - That setup-hook does not survive us: `buildEnv` drops `nix-support`
+      outright (`pkgs/build-support/buildenv/builder.pl`, the
+      `return if $relName eq "/nix-support"` line). So the gem's files would
+      be in the env with nothing able to find them.
+    - It also strictly `inherit`s `source.{url,rev,sha256,fetchSubmodules}`,
+      and a Gemfile.lock has no sha256.
+
+    **Switching to `type = "git"` requires #10 (Bundler-aware binstubs /
+    `Bundler.setup`) as a hard prerequisite.** Do that first or not at all.
+
+    Why not `pathDerivation`: it returns a fake derivation whose `outPath` is
+    the raw source directory. `bundlerEnv` makes that work with
+    `pathsToLink = ["/lib"]`, `confFiles` and binstubs. We have none of those,
+    so the gem's `lib/hello_gem.rb` would land at `$out/lib/hello_gem.rb` —
+    not on `GEM_PATH`, not on `$LOAD_PATH`. (`type = "url"` is not an
+    alternative either: `nix-bundle-install.rb` path mode copies nothing into
+    `$out`.)
+
+    One more load-bearing detail: the `preBuild` that runs `git init && git
+    add -A` is **not** decorative. Gemspecs commonly compute `spec.files` via
+    `git ls-files`, and neither `builtins.fetchGit` output nor a store copy
+    has a `.git`. Without it the gem builds fine and ships zero files, and you
+    find out at `require` time. The `postInstall` assertion (gemspec present,
+    gem directory non-empty) exists to make that failure loud.
+
+    **Still missing:**
+    - Git gems with native extensions will fail — they need `gemPath` for
+      inter-gem build deps (#9). Not exercised by the examples.
+    - `builtins.fetchGit` fetches at *evaluation* time and its output is not a
+      fixed-output derivation, so no binary cache can serve it. The
+      `gemSrcOverrides` argument is the escape hatch for hermetic or offline
+      builds.
+    - `glob:` on a GIT or PATH section throws: `buildRubyGem` builds the first
+      `*.gemspec` it finds, so a monorepo source would silently build the
+      wrong gem. `PLUGIN SOURCE` throws too.
+    - `branch:` / `tag:` / `ref:` are parsed and recorded in `source` but not
+      fed to `fetchGit`. The output path is determined by `rev` alone
+      (verified: adding `ref` or `allRefs` yields an identical store path), so
+      they would only change fetch strategy. They are there for #11 interop.
+    - Only verified against GitHub. `allRefs = true` is the hedge for servers
+      that don't set `uploadpack.allowAnySHA1InWant`.
+    - A `gemConfig` entry that sets `src`, `unpackPhase` or `buildPhase` on a
+      git/path gem will fight our wrapper. Only `preBuild`, `postInstall` and
+      `nativeBuildInputs` are composed; everything else is last-writer-wins.
 
 14. **The dependency graph is in the lockfile; `gem-groups.rb` is redundant.**
     The `specs:` subsection of each `GEM` block lists every gem's direct

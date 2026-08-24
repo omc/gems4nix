@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# The unit tests import nixpkgs via an unpinned fetchTarball, so they cannot be
+# exposed as root-flake `checks` (those evaluate purely). The examples are
+# standalone flakes with a `path:../..` input, which would be a self-reference
+# cycle if pulled into the root flake. So CI runs the same commands TESTING.md
+# documents, directly.
 jobs:
   flake-check:
     name: nix flake check (x86_64-linux)
@@ -20,3 +25,41 @@ jobs:
 
       - name: nix flake check
         run: nix flake check --print-build-logs
+
+  unit:
+    name: unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: parser helpers
+        run: nix eval --file test/unit/test-parser.nix --json
+
+      - name: filter helpers
+        run: nix eval --file test/unit/test-filter.nix --json
+
+  examples:
+    name: example (${{ matrix.example }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [simple, medium, complex]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Enable Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # The complex example has a git-sourced gem, which builtins.fetchGit
+      # fetches at evaluation time. This step needs network access; it is not
+      # substitutable from a binary cache.
+      - name: nix flake check
+        run: nix flake check --no-write-lock-file --print-build-logs
+        working-directory: examples/${{ matrix.example }}

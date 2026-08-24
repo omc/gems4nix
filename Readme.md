@@ -75,6 +75,76 @@ the order is `["ruby" "arm64-darwin" "universal-darwin"]`, so an exact
 arch match always beats a compatible one, and any native variant beats
 pure ruby.
 
+## Git and path sources
+
+`GIT` and `PATH` sections of the lockfile are parsed and built alongside `GEM`
+ones. Nothing to configure for the common case:
+
+```
+GIT
+  remote: https://github.com/omc/errgonomic.git
+  revision: f06314af89209f855019219fd198513855be0fd5
+  branch: main
+  specs:
+    errgonomic (0.5.1)
+
+PATH
+  remote: vendor/hello_gem
+  specs:
+    hello_gem (0.1.0)
+```
+
+Git gems are fetched with `builtins.fetchGit`, pinned to `revision:`. There is
+no hash in the lockfile for these, and inventing a side table of hashes is
+exactly the bundix workflow this project exists to delete. The tradeoffs are
+real and worth knowing:
+
+- **The fetch happens at evaluation time.** `nix eval`, `nix flake show` and
+  `nix flake check` on anything touching a git gem need network access and, for
+  a private repo, credentials. Remote builders don't help; evaluation is local.
+  On the upside, `builtins.fetchGit` runs as you, so `ssh-agent`,
+  `~/.ssh/config`, `~/.netrc` and credential helpers all just work.
+- **The result is not substitutable.** It isn't a fixed-output derivation, so a
+  binary cache can't serve it. Every fresh machine refetches.
+- If that doesn't suit you, `gemSrcOverrides` swaps the fetcher per gem:
+
+  ```nix
+  gemSrcOverrides.errgonomic = pkgs.fetchgit {
+    url = "https://github.com/omc/errgonomic.git";
+    rev = "f06314af89209f855019219fd198513855be0fd5";
+    hash = "sha256-...";
+  };
+  ```
+
+Path remotes are resolved relative to the Gemfile's directory. Pass `root` if
+your Gemfile isn't co-located with its path gems (a `writeText` Gemfile, or a
+`remote: ../shared/mygem` pointing outside the flake):
+
+```nix
+gemEnv {
+  name = "my-app";
+  gemfile = ./Gemfile;
+  gemfileLock = ./Gemfile.lock;
+  root = ./.;
+}
+```
+
+Note that a path gem's source must be inside the flake for Nix to see it.
+
+Known limitations, stated rather than implied:
+
+- **Native extensions in a git gem will fail.** They need `gemPath` wired up for
+  inter-gem build dependencies (TODO #9). Pure-Ruby git gems are what's tested.
+- **Only GitHub is exercised.** Fetching a bare SHA is verified against GitHub;
+  `allRefs = true` is the hedge for servers that don't set
+  `uploadpack.allowAnySHA1InWant`, but other hosts are untested.
+- `glob:` on a GIT or PATH section throws, as does a `PLUGIN SOURCE` section.
+  `buildRubyGem` builds the first `*.gemspec` it finds, so honouring a glob
+  isn't possible without silently picking the wrong gem.
+- Any `CHECKSUMS` line without a hash that no GIT or PATH section explains is
+  now an evaluation error. Previously such gems were dropped silently and only
+  surfaced as a `LoadError` at runtime.
+
 ## Testing
 
 Unit tests for the parser and filter helpers:
@@ -96,7 +166,7 @@ cd examples/complex && nix flake check --no-write-lock-file
 |-----------|------|---------------|
 | `simple`  | rack, rake | Pure-ruby gems load and report correct versions |
 | `medium`  | nokogiri, puma, ethon, rack, minitest | Native platform variants, group filtering, `defaultGemConfig` overrides |
-| `complex` | Rails 8, ffi, nokogiri, bootsnap, errgonomic (git), hello_gem (path) | Full Rails env, git/path sources (SKIP until TODO #13) |
+| `complex` | Rails 8, ffi, nokogiri, bootsnap, errgonomic (git), hello_gem (path) | Full Rails env, git and path sources, transitive deps |
 
 See `TESTING.md` for the full test strategy, structure, and red-green-refactor workflow.
 
@@ -104,7 +174,6 @@ See `TESTING.md` for the full test strategy, structure, and red-green-refactor w
 
 This is a few days of coding. It's being used in prod but for a specific Rails app and its gems that gets daily attention from a team. There is probably more generalized usage to take into account and collect into unit tests. Still, in general, the hard parts are already solved in nixpkgs, this is just an alternate route to collecting the relevant attributes for each gem.
 
-- Git and path gem sources. The parser gracefully skips these (no crash), but the gems aren't included in the environment. `buildRubyGem` already handles both source types; we just need to parse the `GIT` and `PATH` lockfile sections.
 - `bundlerEnv` has a much more capable `buildEnv` with Bundler-aware binstubs. Need to study the differences and decide what to adopt.
 - See `TODO.md` for the full list of critiques and upstream alignment opportunities.
 
