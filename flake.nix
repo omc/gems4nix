@@ -75,10 +75,18 @@
           unit-parse = nixEvalCheck "parse" ./test/unit/test-parse-logic.nix;
           unit-pipeline = nixEvalCheck "pipeline" ./test/unit/test-pipeline-logic.nix;
           unit-credentials = nixEvalCheck "credentials" ./test/unit/test-credentials-logic.nix;
+          unit-arguments = nixEvalCheck "arguments" ./test/unit/test-arguments-logic.nix;
 
           # Asserts credential plumbing on derivation attributes only; no fetch.
           credentials-wiring = pkgs.writeText "credentials-wiring" (
             builtins.deepSeq (import ./test/integration/credentials/wiring.nix {
+              inherit pkgs gemfileEnv;
+            }) "PASS"
+          );
+
+          # Asserts that gemfileEnv rejects an argument it does not declare.
+          arguments-strictness = pkgs.writeText "arguments-strictness" (
+            builtins.deepSeq (import ./test/integration/arguments/strictness.nix {
               inherit pkgs gemfileEnv;
             }) "PASS"
           );
