@@ -207,8 +207,7 @@ in
     # resolved against. We never read it, and gemfileEnv never checks it
     # against the ruby it builds with. The two drift in silence: a lockfile
     # saying 3.4.9 built against nixpkgs 24.11 gives a whole environment
-    # compiled for 3.3.5, and the first sign of trouble is a runtime error in
-    # a gem that expected the newer stdlib.
+    # compiled for 3.3.5. What breaks after that we did not measure.
     #
     # THEORIZED FIX
     # Read the section here and return it from parseLockfileContent, then
@@ -221,6 +220,11 @@ in
     #
     # Return null when the section is absent. It is optional, and a lockfile
     # without it is not an error.
+    #
+    # The value sometimes carries a patchlevel: examples/complex records
+    # `ruby 3.3.10p183`. This test pins the bare form only. Whoever writes the
+    # parser decides whether the patchlevel stays in the returned string, and
+    # should add the case here once decided.
     test_parseLockfileContent_reads_the_ruby_version =
       let
         lockfile = ''
@@ -255,8 +259,9 @@ in
       LIMITATION (TODO #10, detail in TODO #13)
       We install a git gem as an ordinary gem, so plain `require` finds it
       through the GEM_PATH. Bundler does not. Bundler::Source::Git#load_spec_files
-      looks in GEM_HOME/bundler/gems/<name>-<shortrev> and nowhere else, and we
-      never write that directory. So an app booting with `require "bundler/setup"`
+      looks in bundler/gems/<name>-<shortrev> under Bundler's install path, which
+      is GEM_HOME unless BUNDLE_PATH says otherwise, and nowhere else. We never
+      write that directory. So an app booting with `require "bundler/setup"`
       cannot use a git gem from us. That is every stock Rails app.
 
       Gems from GEM and PATH sections are unaffected. Bundler resolves a
@@ -276,8 +281,12 @@ in
            https://github.com/omc/errgonomic.git (at main@f06314a) is not yet
            checked out. Run `bundle install` first. (Bundler::GitError)
 
-      The same command with only the PATH gem in the Gemfile succeeds, with no
-      `bundle install` first. That asymmetry is the whole finding.
+      That transcript is bundler 2.5.22. The line number moves between
+      releases; the raise sits in load_spec_files either way.
+
+      For the other half, a separate Gemfile holding only a path gem loads
+      under the same `require "bundler/setup"`, with no built environment and
+      no `bundle install`. That asymmetry is the whole finding.
 
       WHY NO TEST
       Nothing here is a branch in our code, and no assertion in a Nix

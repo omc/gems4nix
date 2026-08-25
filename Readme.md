@@ -103,12 +103,13 @@ real and worth knowing:
   `nix flake check` on anything touching a git gem need network access and, for
   a private repo, credentials. Remote builders don't help; evaluation is local.
 - **A private repo needs credentials your git already has.**
-  `builtins.fetchGit` runs your git as you, so a `url.<ssh>.insteadOf` rewrite,
-  an ssh key, or a credential helper that holds an entry for the host all work.
-  Two things that look like they should work don't. Nix's `access-tokens`
-  setting covers the `github:` and `gitlab:` flake fetchers, not
-  `builtins.fetchGit` on a plain git URL. A credential helper with no
-  credential for that host fails like an unconfigured machine does:
+  `builtins.fetchGit` runs your git as you, so a credential source that git
+  reaches should work. A `url.<ssh>.insteadOf` rewrite onto an ssh key is the
+  one we verified. Two things that look like they should work don't. Nix's
+  `access-tokens` setting covers the `github:` and `gitlab:` flake fetchers,
+  not `builtins.fetchGit` on a plain git URL. And a credential helper needs an
+  entry for the host: one holding no GitHub credential failed the way an
+  unconfigured machine does,
   `fatal: could not read Username for 'https://github.com'`. A CI runner needs
   its own arrangement — a deploy key plus an `insteadOf` rewrite, a netrc or
   token helper, or `gemSrcOverrides`.
@@ -166,15 +167,18 @@ Read this before you put a git gem in a Rails app.
 
 We install a git gem as an ordinary gem, so plain `require` finds it through
 the `GEM_PATH`. Bundler doesn't. `Bundler::Source::Git` looks for a git gem in
-`GEM_HOME/bundler/gems/<name>-<shortrev>` and nowhere else, so an app that
-boots with `require "bundler/setup"` — which is every stock Rails app — fails
-on the git gem:
+`bundler/gems/<name>-<shortrev>` under Bundler's install path — `GEM_HOME`
+unless `BUNDLE_PATH` says otherwise — and nowhere else. So an app that boots
+with `require "bundler/setup"`, which is every stock Rails app, fails on the
+git gem:
 
 ```
 bundler/source/git.rb:236:in `rescue in load_spec_files':
   https://github.com/omc/errgonomic.git (at main@f06314a) is not yet
   checked out. Run `bundle install` first. (Bundler::GitError)
 ```
+
+That transcript is bundler 2.5.22. The line number moves between releases.
 
 Gems from `GEM` and `PATH` sections are fine. Bundler resolves a rubygems gem
 through `Gem::Specification`, which reads the `GEM_PATH`, and it reads a path

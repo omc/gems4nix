@@ -180,9 +180,10 @@ the less we maintain and the more we benefit from upstream fixes.
       reads the gemspec straight out of the source directory. Verified: a
       path gem loads under `bundler/setup` with no `bundle install` first.
     - A gem from a `GIT` section does not. `Bundler::Source::Git#load_spec_files`
-      looks only in `GEM_HOME/bundler/gems/<name>-<shortrev>` and never
-      consults the `GEM_PATH`. We install git gems as ordinary gems, so
-      Bundler cannot see them and raises `Bundler::GitError`.
+      looks in one directory, `bundler/gems/<name>-<shortrev>` under Bundler's
+      install path, and never consults the `GEM_PATH`. That install path is
+      `GEM_HOME` unless `BUNDLE_PATH` says otherwise. We install git gems as
+      ordinary gems, so Bundler cannot see them and raises `Bundler::GitError`.
 
     So every stock Rails app is shut out of git gems until this item lands.
     Item 13 records the repro and the workaround.
@@ -273,8 +274,8 @@ the less we maintain and the more we benefit from upstream fixes.
     draft of this item claimed #10 was not a blocker because we chose
     `type = "gem"`. That claim was wrong and is corrected here. `type = "gem"`
     buys us plain `require` through the `GEM_PATH`, and nothing more. Bundler
-    finds a git gem by one path only, `GEM_HOME/bundler/gems/<name>-<shortrev>`,
-    which we never write. So an app whose `config/boot.rb` says
+    finds a git gem by one path only, the `bundler/gems/<name>-<shortrev>`
+    directory #10 describes, which we never write. So an app whose `config/boot.rb` says
     `require "bundler/setup"` — every stock Rails app — still cannot use a git
     gem from us. #10 is not a blocker for *building* a git gem. It is a
     blocker for *consuming* one from a Bundler-booted app.
@@ -286,7 +287,8 @@ the less we maintain and the more we benefit from upstream fixes.
     # GEM_PATH set, plain require:
     OK plain require errgonomic
 
-    # same environment, via Bundler:
+    # same environment, via Bundler (transcript from bundler 2.5.22; the
+    # line number moves between releases):
     bundler/source/git.rb:236:in `rescue in load_spec_files':
       https://github.com/omc/errgonomic.git (at main@f06314a) is not yet
       checked out. Run `bundle install` first. (Bundler::GitError)
@@ -381,13 +383,19 @@ the less we maintain and the more we benefit from upstream fixes.
     - Nix's `access-tokens` setting does **not** help. It applies to the
       `github:` and `gitlab:` flake input fetchers, not to `builtins.fetchGit`
       on a plain git URL.
-    - A credential helper works only if it holds a credential for that host.
-      An `osxkeychain` helper with no GitHub entry fails the same way.
+    - A credential helper needs an entry for the host. An `osxkeychain` helper
+      holding no GitHub credential fails the same way.
+
+    Only the rewrite was measured as working. Every other credential source
+    git can reach should work too, on the same reasoning, but we have not
+    tried them.
 
     So a CI runner needs its own arrangement: a deploy key plus an `insteadOf`
     rewrite, a netrc or token credential helper, or `gemSrcOverrides` to skip
-    the fetch entirely. Check `netrc-file` points somewhere that exists before
-    trusting it; a stale path fails silently.
+    the fetch entirely. Note that Nix's `netrc-file` setting is no help here
+    either, for the same reason `access-tokens` isn't: it feeds Nix's own
+    fetchers, not the git that `builtins.fetchGit` runs. The machine we
+    measured on had it pointing at a home directory that does not exist.
 
     **Action:** Document the requirement where a user meets it, and consider a
     check that names the missing credential rather than letting git's message
@@ -402,8 +410,9 @@ the less we maintain and the more we benefit from upstream fixes.
     The failure is silent and the versions can drift far apart. A lockfile
     saying `ruby 3.4.9` built against nixpkgs 24.11, whose default is 3.3.5,
     produces a full environment with no warning. Gems resolved for one minor
-    version get installed for another, and the first sign of trouble is a
-    runtime error in a gem that assumed the newer stdlib.
+    version get installed for another. What happens next we did not measure:
+    a gem may fail at build on `required_ruby_version`, or raise at runtime
+    after assuming a newer stdlib, or never notice.
 
     **Action:** Parse the section in `parser-helpers.nix` and return it from
     `parseLockfileContent`. Then compare it against `ruby.version` in
