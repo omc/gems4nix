@@ -41,5 +41,33 @@ let
     drvPathFor ./plugin-source.lock
   );
 
+  test_duplicate_gem_across_sections_rejected = assertThrows "a gem two GEM sections both provide is an evaluation error" (
+    drvPathFor ./duplicate-gem-remotes.lock
+  );
+
+  # A section with several remotes: every one of them has to reach the fetch,
+  # in the order the lockfile lists them, or a gem only the other remote
+  # carries fails to download with nothing saying a remote was dropped.
+  test_two_remotes_reach_the_fetch =
+    let
+      env = gemfileEnv {
+        name = "lockfile-guards-two-remotes";
+        gemfile = ./Gemfile;
+        gemfileLock = ./two-remotes.lock;
+        groups = [ "default" ];
+        platforms = [ "ruby" ];
+      };
+    in
+    assertEq "both of a section's remotes are fetched from, in lockfile order"
+      (pkgs.lib.concatMap (gem: gem.src.urls) env.paths)
+      [
+        "https://gems.example.invalid/gems/rake-13.3.1.gem"
+        "https://rubygems.org/gems/rake-13.3.1.gem"
+      ];
+
 in
-test_valid_lockfile_evaluates && test_unexplained_hashless_rejected && test_plugin_source_rejected
+test_valid_lockfile_evaluates
+&& test_unexplained_hashless_rejected
+&& test_plugin_source_rejected
+&& test_duplicate_gem_across_sections_rejected
+&& test_two_remotes_reach_the_fetch
