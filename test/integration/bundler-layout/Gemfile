@@ -1,0 +1,4 @@
+source 'https://rubygems.org'
+
+gem 'widget', git: 'https://git.example.com/acme/widget-ruby.git'
+gem 'gadget', path: 'vendor/gadget'

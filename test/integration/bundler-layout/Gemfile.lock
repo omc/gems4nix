@@ -1,0 +1,30 @@
+GIT
+  remote: https://git.example.com/acme/widget-ruby.git
+  revision: 4f2e1c8a9b3d5e7f0a1b2c3d4e5f60718293a4b5
+  specs:
+    widget (2.0.0)
+
+PATH
+  remote: vendor/gadget
+  specs:
+    gadget (0.1.0)
+
+GEM
+  remote: https://rubygems.org/
+  specs:
+    rake (13.3.1)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  gadget!
+  widget!
+
+CHECKSUMS
+  gadget (0.1.0)
+  rake (13.3.1) sha256=8c9e89d09f66a26a01264e7e3480ec0607f0c497a861ef16063604b1b08eb19c
+  widget (2.0.0)
+
+BUNDLED WITH
+   2.7.2

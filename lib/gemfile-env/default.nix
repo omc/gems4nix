@@ -17,6 +17,7 @@
 let
   defaultRuby = ruby;
   argHelpers = import ./arguments.nix { inherit lib; };
+  bundlerHelpers = import ./bundler.nix { inherit lib; };
 
   # function arguments:
   gemfileEnv =
@@ -223,6 +224,32 @@ let
               postInstall =
                 let
                   gemRoot = "$out/${ruby.gemPath}";
+                  # Bundler resolves a GIT-sourced gem only out of
+                  # bundler/gems/<scope>, so the RubyGems layout above leaves
+                  # it invisible to `require "bundler/setup"`. Give Bundler a
+                  # second view of the same gem rather than moving it: plain
+                  # `require` still has to work for a consumer that never
+                  # boots through Bundler.
+                  #
+                  # The entries are symlinked, and the serialized gemspec from
+                  # specifications/ is used in place of whatever the source
+                  # tree ships. That file evaluates anywhere, while a source
+                  # gemspec often shells out to `git ls-files` or reads a
+                  # sibling it no longer sits beside. Exactly one gemspec ends
+                  # up here, because Bundler loads every one it globs.
+                  #
+                  # This runs before any caller-supplied postInstall for the
+                  # same reason the empty-gem check does: an `exit` there must
+                  # not be able to leave a git gem Bundler cannot see.
+                  bundlerLayout = lib.optionalString (attrs.source.type == "git") ''
+                    gems4nixScope="${gemRoot}/bundler/gems/${bundlerHelpers.gitScope attrs.source}"
+                    mkdir -p "$gems4nixScope"
+                    for gems4nixEntry in "$gems4nixDir"/*; do
+                      case "$gems4nixEntry" in *.gemspec) continue ;; esac
+                      ln -s "../../../gems/${attrs.gemName}-${attrs.version}/$(basename "$gems4nixEntry")" "$gems4nixScope/"
+                    done
+                    cp "$gems4nixSpec" "$gems4nixScope/${attrs.gemName}.gemspec"
+                  '';
                 in
                 ''
                   gems4nixSpec="${gemRoot}/specifications/${attrs.gemName}-${attrs.version}.gemspec"
@@ -236,6 +263,7 @@ let
                     echo "  its gemspec probably computed an empty spec.files (git ls-files)." >&2
                     exit 1
                   fi
+                  ${bundlerLayout}
                   ${attrs.postInstall or ""}
                 '';
             }

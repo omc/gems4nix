@@ -51,6 +51,9 @@ jobs:
       - name: arguments
         run: nix eval --file test/unit/test-arguments.nix --json
 
+      - name: bundler
+        run: nix eval --file test/unit/test-bundler.nix --json
+
       - name: pending ledger
         run: nix eval --file test/unit/test-pending.nix ledger --json
 

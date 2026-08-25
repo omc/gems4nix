@@ -76,6 +76,7 @@
           unit-pipeline = nixEvalCheck "pipeline" ./test/unit/test-pipeline-logic.nix;
           unit-credentials = nixEvalCheck "credentials" ./test/unit/test-credentials-logic.nix;
           unit-arguments = nixEvalCheck "arguments" ./test/unit/test-arguments-logic.nix;
+          unit-bundler = nixEvalCheck "bundler" ./test/unit/test-bundler-logic.nix;
 
           # The pending ledger asserts that each known limitation is still a
           # limitation. It takes `.ledger` rather than the whole file, because
@@ -111,6 +112,14 @@
           # check runs where a gemConfig postInstall cannot skip it.
           git-path-wiring = pkgs.writeText "git-path-wiring" (
             builtins.deepSeq (import ./test/integration/git-path-wiring/wiring.nix {
+              inherit pkgs gemfileEnv;
+            }) "PASS"
+          );
+
+          # Asserts a git gem gets the bundler/gems checkout Bundler resolves
+          # it out of, and that a path gem does not.
+          bundler-layout = pkgs.writeText "bundler-layout" (
+            builtins.deepSeq (import ./test/integration/bundler-layout/layout.nix {
               inherit pkgs gemfileEnv;
             }) "PASS"
           );
