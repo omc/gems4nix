@@ -57,10 +57,12 @@ flowchart TD
     than one: moving the gem to satisfy Bundler would break the plain
     `require` that a consumer who never boots through Bundler relies on.
 11. A `GEM` section's gems are its four-space spec lines, and its remotes are
-    every `remote:` line it carries, kept in the lockfile's order because that
-    is Bundler's source-priority order. A six-space line names a dependency
-    another section may provide, so counting it here would claim this section's
-    remote for a gem that is not on it.
+    every `remote:` line it carries, reversed. Bundler looks up the
+    last-declared source first and writes the lockfile first-declared first, so
+    the reversal is what makes our list equal its own `remotes` and the fetch
+    try the highest-priority remote first. A six-space line names a dependency
+    another section may provide, so counting it as a gem here would claim this
+    section's remote for a gem that is not on it.
 12. A `RUBY VERSION` the lockfile and the `ruby` argument disagree on throws
     across the ABI and warns below it. Gems install under
     `lib/ruby/gems/<major>.<minor>.0`, so a difference there is every gem; below

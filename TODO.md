@@ -17,7 +17,7 @@
    noting for very large lockfiles.
 
 3. **Done. A gem carries every remote its GEM section declares, and a contested gem is refused.**
-   `parseGemSection` reads a section by indent depth: every `  remote:` line is a remote of that section, and only the four-space lines under `specs:` are its gems. Bundler writes several `remote:` lines into one section when a Gemfile declares more than one global source, last-declared-first, which is its own source-priority order; the list keeps that order and `fetchurl` tries the urls in it.
+   `parseGemSection` reads a section by indent depth: every `  remote:` line is a remote of that section, and only the four-space lines under `specs:` are its gems. Bundler writes several `remote:` lines into one section when a Gemfile declares more than one global source, and looks the last-declared one up first — while writing the file first-declared first, because `Source::Rubygems#add_remote` unshifts and `#to_lock` reverses that back. The list is therefore the reverse of the file, which makes it equal to Bundler's own `remotes`, and `fetchurl` tries the urls in that order. Measured on Bundler 2.5.22, 2.6.6 and 2.7.2: all three write `remote: A` then `remote: B` for a Gemfile declaring A then B, and all three reparse that file to `["B", "A"]`.
 
    The six-space dependency lines used to count as gems, which claimed the section's remote for gems another section provides. Measured against `omc/sprout`: its private `depot` section lists `faraday` and six other rubygems.org gems as dependencies, and each of them claimed `rubygems.pkg.github.com`. Nothing broke only because `builtins.listToAttrs` kept the earlier rubygems.org entry — an accident of the order Bundler happened to write the two sections in.
 

@@ -47,8 +47,11 @@ let
   );
 
   # A section with several remotes: every one of them has to reach the fetch,
-  # in the order the lockfile lists them, or a gem only the other remote
-  # carries fails to download with nothing saying a remote was dropped.
+  # or a gem only the other remote carries fails to download with nothing
+  # saying a remote was dropped. Order matters as much as membership. Bundler
+  # looks up the last-declared source first and the lockfile lists them the
+  # other way round, so the fixture's `gems.example.invalid` line comes first
+  # in the file and must be tried last.
   test_two_remotes_reach_the_fetch =
     let
       env = gemfileEnv {
@@ -59,11 +62,11 @@ let
         platforms = [ "ruby" ];
       };
     in
-    assertEq "both of a section's remotes are fetched from, in lockfile order"
+    assertEq "both of a section's remotes are fetched from, in Bundler's lookup order"
       (pkgs.lib.concatMap (gem: gem.src.urls) env.paths)
       [
-        "https://gems.example.invalid/gems/rake-13.3.1.gem"
         "https://rubygems.org/gems/rake-13.3.1.gem"
+        "https://gems.example.invalid/gems/rake-13.3.1.gem"
       ];
 
   # The Ruby version is written against pkgs.ruby rather than fixed in a

@@ -285,9 +285,12 @@ let
   # provides. Versions come from CHECKSUMS, so only the names matter here.
   #
   # Bundler puts several `remote:` lines in one GEM section when a Gemfile
-  # declares more than one global source, and writes them last-declared-first,
-  # which is its own source-priority order. Keeping the lockfile's order means
-  # a fetch tries them in that order too.
+  # declares more than one global source, and looks them up last-declared
+  # first. The file is written the other way round: `Source::Rubygems`
+  # unshifts each remote as it is declared and `to_lock` reverses that back,
+  # so the lockfile lists them first-declared first. Reading the file top to
+  # bottom would try Bundler's lowest-priority remote first, so the list is
+  # reversed here and comes out equal to Bundler's own `remotes`.
   #
   # Only the 4-space lines are gems of this section. A 6-space line names a
   # dependency, which some other section may well provide; counting it here
@@ -301,7 +304,7 @@ let
       };
       h = body.headers;
       unknown = builtins.filter (k: k != "remote") (builtins.attrNames h);
-      remotes = lib.lists.map (lib.strings.removeSuffix "/") (h.remote or [ ]);
+      remotes = lib.lists.reverseList (lib.lists.map (lib.strings.removeSuffix "/") (h.remote or [ ]));
     in
     if !body.hasSpecs then
       throw "gems4nix: GEM section has no 'specs:' line"

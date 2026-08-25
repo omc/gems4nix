@@ -217,18 +217,19 @@ let
     ]
     && assertEq "parseGemSection: gems from private remote" result.gems [ "depot" ];
 
-  # Bundler writes one `remote:` line per remote of a single source, and it
-  # writes them last-declared-first, which is its own priority order.
+  # Bundler writes one `remote:` line per remote of a single source, in the
+  # order the Gemfile declared them, and looks them up in the opposite order.
+  # The list has to come out in lookup order, so it is the reverse of the file.
   test_parseGemSection_multiple_remotes =
     let
       result = parseGemSection [
-        "  remote: https://private.example.com/"
         "  remote: https://rubygems.org/"
+        "  remote: https://private.example.com/"
         "  specs:"
         "    rake (13.0.6)"
       ];
     in
-    assertEq "parseGemSection: every remote survives, in lockfile order" result.remotes [
+    assertEq "parseGemSection: every remote survives, in Bundler's lookup order" result.remotes [
       "https://private.example.com"
       "https://rubygems.org"
     ]
@@ -552,7 +553,7 @@ let
     && assertEq "indexRemotes: mygem" result.mygem [ "https://private.example.com" ];
 
   # A section's whole remote list belongs to each of its gems: any of them may
-  # serve it, and fetchurl tries them in order.
+  # serve it, and fetchurl tries them in the order indexRemotes hands over.
   test_indexRemotes_carries_every_remote =
     let
       result = indexRemotes [

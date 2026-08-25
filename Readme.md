@@ -196,7 +196,9 @@ The pipeline has three stages:
 
 ### Where a gem is fetched from
 
-A `GEM` section names the remotes its gems come from, and gems4nix gives every gem in that section every one of them, in the order the lockfile writes them. Bundler puts more than one `remote:` line in a single section when a `Gemfile` declares more than one global source, and it writes them last-declared-first, which is its own source-priority order. The fetch tries them in that order and stops at the first that serves the gem.
+A `GEM` section names the remotes its gems come from, and gems4nix gives every gem in that section every one of them. Bundler puts more than one `remote:` line in a single section when a `Gemfile` declares more than one global source, and it looks the last-declared one up first — but the file is written the other way round. `Source::Rubygems#add_remote` unshifts each remote as the `Gemfile` declares it, and `#to_lock` reverses that back, so the lockfile lists them first-declared first. gems4nix reverses the file's order, which makes its list identical to Bundler's own `remotes`, and the fetch then tries them highest-priority first and stops at the first that serves the gem.
+
+Reading the file top to bottom instead would try Bundler's *lowest*-priority source first, which is usually the public `source` line at the top of the `Gemfile` rather than the private registry added below it. Verified against Bundler 2.5.22, 2.6.6 and 2.7.2, which spans every version the consuming repositories lock.
 
 Only the four-space lines under `specs:` are gems of a section. The six-space lines below each one name that gem's dependencies, which another section may well provide.
 
