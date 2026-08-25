@@ -325,7 +325,13 @@ let
         # failure this whole layout exists to remove, one level up, so the
         # second one refuses instead. GEMS4NIX_GEM_HOME is what distinguishes
         # another gems4nix environment from a GEM_HOME the user brought, which
-        # is overridden without comment.
+        # is overridden without comment. It has to name a directory that is
+        # really there, because refusing costs a shell and a stray export
+        # should not be able to do that.
+        #
+        # Both variables describe a build environment. Nothing here bakes
+        # either into an output, and a build recipe that captures one is
+        # recording the machine it ran on.
         postBuild =
           let
             gemHome = "$out/${ruby.gemPath}";
@@ -336,9 +342,14 @@ let
             gems4nixGemHome="${gemHome}"
             EOF
             cat >> $out/nix-support/setup-hook <<'HOOK'
-            if [ -n "''${GEMS4NIX_GEM_HOME-}" ] && [ "''${GEMS4NIX_GEM_HOME-}" != "''$gems4nixGemHome" ]; then
+            gems4nixOther="''${GEMS4NIX_GEM_HOME-}"
+            case "''$gems4nixOther" in
+              /nix/store/*) [ -d "''$gems4nixOther" ] || gems4nixOther="" ;;
+              *) gems4nixOther="" ;;
+            esac
+            if [ -n "''$gems4nixOther" ] && [ "''$gems4nixOther" != "''$gems4nixGemHome" ]; then
               echo 'gems4nix: two gems4nix environments are on this shell, and GEM_HOME can only name one.' >&2
-              echo "  already here: ''${GEMS4NIX_GEM_HOME}" >&2
+              echo "  already here: ''$gems4nixOther" >&2
               echo "  and now:      ''$gems4nixGemHome" >&2
               echo 'Bundler reads a git gem only from bundler/gems under GEM_HOME, so the git gems of' >&2
               echo 'whichever environment loses go missing from require "bundler/setup" while a plain' >&2
@@ -349,7 +360,7 @@ let
             export GEMS4NIX_GEM_HOME="''$gems4nixGemHome"
             export GEM_HOME="''$gems4nixGemHome"
             export GEM_PATH="''$gems4nixGemHome''${GEM_PATH:+:''$GEM_PATH}"
-            unset gems4nixGemHome
+            unset gems4nixGemHome gems4nixOther
             HOOK
           '';
       }

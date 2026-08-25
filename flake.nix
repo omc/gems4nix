@@ -91,6 +91,22 @@
           };
 
           bundlerLayoutGemPath = "${bundlerLayoutGems}/${pkgs.ruby.gemPath}";
+
+          # A second, unrelated environment, so the composition case is two
+          # real gems4nix environments rather than a path that only looks like
+          # one. Its only gem comes from a PATH source, so it builds offline.
+          otherGems = gemfileEnv {
+            name = "bundler-layout-other";
+            gemfile = ./test/integration/git-path-wiring/Gemfile;
+            gemfileLock = ./test/integration/git-path-wiring/Gemfile.lock;
+            groups = [ "default" ];
+            platforms = [ "ruby" ];
+            gemGroups = {
+              tiny_gem = [ "default" ];
+            };
+          };
+
+          otherGemPath = "${otherGems}/${pkgs.ruby.gemPath}";
         in
         {
           unit-resolve = nixEvalCheck "resolve" ./test/unit/test-resolve-logic.nix;
@@ -176,16 +192,27 @@
                   exit 1
                 fi
 
-                decoy=/nix/store/00000000000000000000000000000000-other-env/lib/ruby/gems/3.3.0
+                # A GEMS4NIX_GEM_HOME that names no environment must not be
+                # able to refuse a shell on its own. Refusing costs a shell, so
+                # a false positive is expensive by construction.
+                for junk in garbage-value /nix/store/00000000000000000000000000000000-gone/lib/ruby/gems/3.3.0; do
+                  actual=$(export GEMS4NIX_GEM_HOME="$junk"; . "$hook"; echo "$GEM_HOME")
+                  if [ "$actual" != "${bundlerLayoutGemPath}" ]; then
+                    echo "a GEMS4NIX_GEM_HOME of '$junk' was trusted; GEM_HOME came out as '$actual'" >&2
+                    exit 1
+                  fi
+                done
+
+                other="${otherGemPath}"
                 if (
-                  export GEM_HOME="$decoy" GEMS4NIX_GEM_HOME="$decoy"
+                  export GEM_HOME="$other" GEMS4NIX_GEM_HOME="$other"
                   . "$hook"
                 ) 2>stderr.txt; then
                   echo "a second gems4nix environment was accepted in silence" >&2
                   exit 1
                 fi
 
-                for needle in "$decoy" "${bundlerLayoutGemPath}" "bundler/setup"; do
+                for needle in "$other" "${bundlerLayoutGemPath}" "bundler/setup"; do
                   if ! grep -qF "$needle" stderr.txt; then
                     echo "the refusal does not mention $needle:" >&2
                     cat stderr.txt >&2
