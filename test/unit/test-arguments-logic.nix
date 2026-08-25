@@ -91,6 +91,7 @@ let
     buildRubyGem = throw "test: buildRubyGem must not be forced";
     defaultGemConfig = throw "test: defaultGemConfig must not be forced";
     buildEnv = throw "test: buildEnv must not be forced";
+    gitMinimal = throw "test: gitMinimal must not be forced";
   };
 
   acceptedArgs = builtins.attrNames (builtins.functionArgs gemfileEnv);
@@ -102,12 +103,14 @@ let
     "extraFiles"
     "gemConfig"
     "gemGroups"
+    "gemSrcOverrides"
     "gemfile"
     "gemfileLock"
     "gemspec"
     "groups"
     "name"
     "platforms"
+    "root"
     "ruby"
   ];
 
