@@ -102,8 +102,16 @@ real and worth knowing:
 - **The fetch happens at evaluation time.** `nix eval`, `nix flake show` and
   `nix flake check` on anything touching a git gem need network access and, for
   a private repo, credentials. Remote builders don't help; evaluation is local.
-  On the upside, `builtins.fetchGit` runs as you, so `ssh-agent`,
-  `~/.ssh/config`, `~/.netrc` and credential helpers all just work.
+- **A private repo needs credentials your git already has.**
+  `builtins.fetchGit` runs your git as you, so a `url.<ssh>.insteadOf` rewrite,
+  an ssh key, or a credential helper that holds an entry for the host all work.
+  Two things that look like they should work don't. Nix's `access-tokens`
+  setting covers the `github:` and `gitlab:` flake fetchers, not
+  `builtins.fetchGit` on a plain git URL. A credential helper with no
+  credential for that host fails like an unconfigured machine does:
+  `fatal: could not read Username for 'https://github.com'`. A CI runner needs
+  its own arrangement — a deploy key plus an `insteadOf` rewrite, a netrc or
+  token helper, or `gemSrcOverrides`.
 - **The result is not substitutable.** It isn't a fixed-output derivation, so a
   binary cache can't serve it. Every fresh machine refetches.
 - If that doesn't suit you, `gemSrcOverrides` swaps the fetcher per gem:

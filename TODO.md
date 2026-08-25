@@ -324,6 +324,8 @@ the less we maintain and the more we benefit from upstream fixes.
       fixed-output derivation, so no binary cache can serve it. The
       `gemSrcOverrides` argument is the escape hatch for hermetic or offline
       builds.
+    - A private repository needs credentials that only the invoking user's git
+      configuration supplies. See #15.
     - `glob:` on a GIT or PATH section throws: `buildRubyGem` builds the first
       `*.gemspec` it finds, so a monorepo source would silently build the
       wrong gem. `PLUGIN SOURCE` throws too.
@@ -361,3 +363,32 @@ the less we maintain and the more we benefit from upstream fixes.
     from the `DEPENDENCIES` section. Propagate groups through the dependency
     edges in pure Nix. This is the single highest-leverage change for the
     project's architecture.
+
+15. **A private git gem depends on the invoking user's git configuration.**
+    `builtins.fetchGit` shells out to the user's own git. Whatever
+    credentials that git can reach, we can reach; whatever it cannot, we
+    cannot. This is a real advantage over a fixed-output fetcher, and it is
+    also the thing that breaks on a machine nobody configured.
+
+    Measured against a private GitHub repository whose lockfile records an
+    `https://` remote:
+
+    - A `url.<ssh>.insteadOf` rewrite works. Git rewrites the https remote to
+      ssh and uses the developer's key. This is what a laptop usually has, and
+      it is why the fetch looks like it "just works".
+    - Without that rewrite, the same https remote fails:
+      `fatal: could not read Username for 'https://github.com'`.
+    - Nix's `access-tokens` setting does **not** help. It applies to the
+      `github:` and `gitlab:` flake input fetchers, not to `builtins.fetchGit`
+      on a plain git URL.
+    - A credential helper works only if it holds a credential for that host.
+      An `osxkeychain` helper with no GitHub entry fails the same way.
+
+    So a CI runner needs its own arrangement: a deploy key plus an `insteadOf`
+    rewrite, a netrc or token credential helper, or `gemSrcOverrides` to skip
+    the fetch entirely. Check `netrc-file` points somewhere that exists before
+    trusting it; a stale path fails silently.
+
+    **Action:** Document the requirement where a user meets it, and consider a
+    check that names the missing credential rather than letting git's message
+    surface alone. The Readme covers the developer case today.
