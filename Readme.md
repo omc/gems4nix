@@ -111,6 +111,12 @@ A `GIT` or `PATH` section carries an option gems4nix does not recognise. Most su
 **"Bundler::GitError: ... is not yet checked out. Run `bundle install` first."**
 Your app boots through `require "bundler/setup"`, one of its gems comes from a `GIT` section, and Bundler is not looking inside the gems4nix environment. gems4nix writes the checkout Bundler wants, under the environment's `GEM_HOME`; what usually goes wrong is that something else set `GEM_HOME` afterwards, or the environment was never on the build's `buildInputs` in the first place. Print `Bundler.bundle_path` and check it is the store path holding your gems. See [Booting through `require "bundler/setup"`](#booting-through-require-bundlersetup).
 
+**"gems4nix: two gems4nix environments are on this shell, and GEM_HOME can only name one."**
+Two `gemfileEnv` results are on one shell's inputs, and the second one's setup hook refused rather than take `GEM_HOME` off the first. `GEM_PATH` would have held both, so plain `require` would have kept working while Bundler lost sight of one environment's git gems, which is the failure the refusal exists to prevent. Build one `gemfileEnv` from both `Gemfile`s, or put the two environments in separate shells. The message names both paths.
+
+**"Gem::FilePermissionError" from `gem install` or `bundle install`**
+`GEM_HOME` points into `/nix/store`, which is read-only, because that is where Bundler has to look for a git gem. Add the gem to the `Gemfile` and rebuild the environment. If a shell genuinely needs a writable gem directory for something else, set `GEM_HOME` again after the environment's setup hook has run, and accept that Bundler will no longer find any git gem in it.
+
 **"could not read Username for 'https://github.com'" while evaluating**
 A private `GIT` remote is fetched by `builtins.fetchGit`, which shells out to your own `git`, and https with no credential helper cannot authenticate. A `url."git@github.com:".insteadOf "https://github.com/"` rewrite in your git config works. `credentials` does not apply here: it covers private gem registries, not git remotes.
 
