@@ -280,9 +280,14 @@ let
       inherit (result) headers specLines hasSpecs;
     };
 
-  # Options we understand in a GIT section. An unknown option is an error,
+  # Options we recognise in a GIT section. An unrecognised option is an error,
   # because most options change which files the gem is built from. To ignore
   # one is to build the wrong thing.
+  #
+  # `glob` is recognised and then refused, which is why it is listed here.
+  # Leaving it out would let the unrecognised-key branch reject it, and the
+  # message that branch gives does not say why a glob in particular cannot
+  # work.
   gitSectionKeys = [
     "remote"
     "revision"
@@ -290,6 +295,14 @@ let
     "branch"
     "tag"
     "submodules"
+    "glob"
+  ];
+
+  # A PATH section has no revision to pin, so it takes only its remote — and
+  # `glob`, on the same recognise-then-refuse footing as GIT.
+  pathSectionKeys = [
+    "remote"
+    "glob"
   ];
 
   # Shared validation for GIT and PATH sections.
@@ -312,7 +325,7 @@ let
       throw
         "gems4nix: ${kind} sources with a 'glob:' option are not supported (remote: ${h.remote or "?"})"
     else if unknown != [ ] then
-      throw "gems4nix: unsupported key '${builtins.head unknown}' in ${kind} section"
+      throw "gems4nix: unsupported key '${builtins.head unknown}' in ${kind} section (remote: ${h.remote or "?"})"
     else if !(h ? remote) then
       throw "gems4nix: ${kind} section has no 'remote:'"
     else
@@ -351,7 +364,7 @@ let
       h = validateSection {
         kind = "PATH";
         inherit body;
-        allowedKeys = [ "remote" ];
+        allowedKeys = pathSectionKeys;
       };
     in
     # `seq` makes the checks above run as soon as anyone looks at the result.

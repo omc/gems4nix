@@ -26,7 +26,11 @@
 4. **Done. GIT and PATH sections are parsed and built.**
    `parseGitSection` and `parsePathSection` read the two source section types by indent depth, and `mergeGemMetadata` folds their gems into the same list the `CHECKSUMS` gems arrive in. `examples/complex` builds `errgonomic` (git) and `hello_gem` (path) and its validator loads both. See #13 for the build half.
 
-   The parser refuses rather than skipping: a hashless `CHECKSUMS` line no source claims, a `PLUGIN SOURCE` section, a `glob:` option and an unrecognised key on a source section are all evaluation errors. Gated in `test/unit/test-parse-logic.nix` by `test_parseLockfile_unexplained_hashless_throws`, `test_parseLockfile_plugin_source_throws`, `test_parseGitSection_glob_throws`, `test_parseGitSection_unknown_key_throws` and `test_parsePathSection_git_key_throws`, and at the `gemfileEnv` level by `test/integration/lockfile-guards/guards.nix`.
+   The parser refuses rather than skipping: a hashless `CHECKSUMS` line no source claims, a `PLUGIN SOURCE` section, a `glob:` option and an unrecognised key on a source section are all evaluation errors. Gated in `test/unit/test-parse-logic.nix` by `test_parseLockfile_unexplained_hashless_throws`, `test_parseLockfile_plugin_source_throws`, `test_parseGitSection_glob_throws`, `test_parsePathSection_glob_throws`, `test_parseGitSection_unknown_key_throws` and `test_parsePathSection_git_key_throws`.
+
+`glob` is listed among each section type's recognised keys precisely so that the two glob tests gate the branch that refuses it. Left off the list, the unrecognised-key branch would reject a glob independently, both tests would pass with the dedicated branch deleted, and this paragraph would be claiming coverage that did not exist. Deleting either branch now fails a test that names it.
+
+At the `gemfileEnv` level the guards are gated by `test/integration/lockfile-guards/guards.nix`.
 
 ### Filtering and Building (`default.nix`)
 
