@@ -98,6 +98,15 @@ A `CHECKSUMS` line carries no hash, which means the gem came from a `GIT` or `PA
 **"gems4nix: PATH source '&lt;dir&gt;' does not exist at &lt;path&gt;"**
 A `PATH` section's `remote:` resolved to a directory that is not there. `remote:` is relative to `root`, which defaults to the directory holding the `Gemfile`. If the Gemfile is not co-located with its path gems, pass `root` explicitly. Note that Nix can only see a path inside the flake's source tree.
 
+**"gems4nix: PLUGIN SOURCE sections are not supported"**
+Your lockfile has a `PLUGIN SOURCE` section, written by a Bundler plugin that supplies gems from somewhere gems4nix does not know how to fetch. There is no way to build those gems here. Remove the plugin from the `Gemfile` and re-run `bundle lock`, or vendor the gems it provides as a `PATH` source.
+
+**"gems4nix: GIT sources with a 'glob:' option are not supported (remote: &lt;url&gt;)"**
+A `GIT` or `PATH` section carries `glob:`, which selects one gemspec out of several in a repository holding more than one gem. `buildRubyGem` builds the first `*.gemspec` it finds and cannot obey the glob, so honouring the section would silently build the wrong gem. Depend on the gem from a registry, or vendor the one subdirectory you want as its own `PATH` source so there is only one gemspec to find.
+
+**"gems4nix: unsupported key '&lt;key&gt;' in GIT section (remote: &lt;url&gt;)"**
+A `GIT` or `PATH` section carries an option gems4nix does not recognise. Most such options change which files the gem is built from, so ignoring one means building something other than what the lockfile describes. The recognised `GIT` keys are `remote`, `revision`, `ref`, `branch`, `tag` and `submodules`; a `PATH` section takes `remote` only. If the key is one Bundler genuinely writes, that is a gap worth an issue — quote the section verbatim.
+
 **"Bundler::GitError: ... is not yet checked out. Run `bundle install` first."**
 Your app boots through `require "bundler/setup"` and one of its gems comes from a `GIT` section. Bundler looks for a git gem in a directory gems4nix does not write. There is no workaround short of vendoring the gem as a `PATH` source. See [Known Limitations](#known-limitations).
 
@@ -257,7 +266,7 @@ Gems from `GEM` and `PATH` sections are unaffected. Bundler resolves a rubygems 
 
 Until this is fixed, vendor the gem and depend on it as a `PATH` source, or publish it to a registry. A vendored path gem loads under `bundler/setup` with no `bundle install`.
 
-A lockfile gems4nix cannot honour is an evaluation error rather than a gem missing from the environment: a hashless `CHECKSUMS` line no source claims, a `PLUGIN SOURCE` section, a `glob:` option, and any unrecognised key on a `GIT` or `PATH` section all throw and name what they found.
+A lockfile gems4nix cannot honour is an evaluation error rather than a gem missing from the environment: a hashless `CHECKSUMS` line no source claims, a `PLUGIN SOURCE` section, a `glob:` option, and any unrecognised key on a `GIT` or `PATH` section all throw and name what they found. Each has its own entry under [Common Errors and Solutions](#common-errors-and-solutions), with the message as thrown and what to do about it.
 
 
 ## Configuration
