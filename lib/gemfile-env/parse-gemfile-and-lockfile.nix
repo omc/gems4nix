@@ -169,4 +169,8 @@ in
     gemGroups = resolvedGemGroups;
   };
   inherit depGraph;
+  # Null unless the lockfile names a Ruby. Which Ruby the environment is
+  # actually built with is gemfileEnv's argument, not this module's, so the
+  # comparison belongs there.
+  inherit (parsed) rubyVersion;
 }

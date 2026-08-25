@@ -25,6 +25,8 @@ let
     parseDependenciesSection
     takeDependenciesSection
     parseRubyVersion
+    rubyAbi
+    rubyVersionVerdict
     parseLockfile
     indexRemotes
     mergeGemMetadata
@@ -475,6 +477,56 @@ let
         "   ruby 3.1.4 (jruby 9.4.5.0)"
         ""
       ]);
+
+  test_rubyAbi =
+    assertEq "rubyAbi: major and minor only" (rubyAbi "3.3.10") "3.3"
+    && assertEq "rubyAbi: a two-part version is its own abi" (rubyAbi "3.4") "3.4";
+
+  test_rubyVersionVerdict_agreement =
+    assertEq "rubyVersionVerdict: the same version is no verdict" (rubyVersionVerdict {
+      locked = "3.4.9";
+      actual = "3.4.9";
+    }) null
+    && assertEq "rubyVersionVerdict: a lockfile naming no ruby is no verdict" (rubyVersionVerdict {
+      locked = null;
+      actual = "3.4.9";
+    }) null;
+
+  test_rubyVersionVerdict_abi_difference_is_an_error =
+    let
+      verdict = rubyVersionVerdict {
+        locked = "3.4.9";
+        actual = "3.3.5";
+      };
+    in
+    assertEq "rubyVersionVerdict: a different abi is an error" verdict.level "error"
+    &&
+      assertEq "rubyVersionVerdict: the error names the locked version"
+        (lib.strings.hasInfix "Ruby 3.4.9" verdict.message)
+        true
+    &&
+      assertEq "rubyVersionVerdict: the error names the version built with"
+        (lib.strings.hasInfix "Ruby 3.3.5" verdict.message)
+        true;
+
+  # examples/complex locks 3.3.10 and builds against nixpkgs 24.11's 3.3.5.
+  # Bundler enforces the Gemfile's `ruby '~> 3.3'`, which both satisfy.
+  test_rubyVersionVerdict_teeny_difference_is_a_warning =
+    let
+      verdict = rubyVersionVerdict {
+        locked = "3.3.10";
+        actual = "3.3.5";
+      };
+    in
+    assertEq "rubyVersionVerdict: a shared abi is a warning" verdict.level "warning"
+    &&
+      assertEq "rubyVersionVerdict: the warning names the locked version"
+        (lib.strings.hasInfix "Ruby 3.3.10" verdict.message)
+        true
+    &&
+      assertEq "rubyVersionVerdict: the warning names the version built with"
+        (lib.strings.hasInfix "Ruby 3.3.5" verdict.message)
+        true;
 
   # ── indexRemotes ──────────────────────────────────────────
 
@@ -1421,6 +1473,10 @@ let
     && test_parseRubyVersion_drops_the_patchlevel
     && test_parseRubyVersion_absent_is_null
     && test_parseRubyVersion_unreadable_throws
+    && test_rubyAbi
+    && test_rubyVersionVerdict_agreement
+    && test_rubyVersionVerdict_abi_difference_is_an_error
+    && test_rubyVersionVerdict_teeny_difference_is_a_warning
     && test_indexRemotes
     && test_indexRemotes_carries_every_remote
     && test_indexRemotes_duplicate_gem_throws

@@ -543,6 +543,39 @@ let
     else
       builtins.head m;
 
+  # The part of a Ruby version that decides whether two Rubies are
+  # interchangeable. Gems install under lib/ruby/gems/<major>.<minor>.0 and a
+  # native extension compiles against that ABI, so a difference here means
+  # every gem in the environment was built for a Ruby the lockfile does not
+  # describe. A difference below it moves nothing.
+  rubyAbi = version: lib.concatStringsSep "." (lib.lists.take 2 (lib.splitString "." version));
+
+  # Compare the Ruby a lockfile was resolved with against the Ruby an
+  # environment is built from. Returns null when they agree or when the
+  # lockfile names none, and otherwise { level; message; }.
+  #
+  # An ABI difference is an error. Anything below it is a warning, because the
+  # requirement Bundler enforces lives in the Gemfile rather than here: this
+  # value records what resolution happened to run on, and a Gemfile asking for
+  # `~> 3.3` is satisfied by any of them.
+  rubyVersionVerdict =
+    { locked, actual }:
+    let
+      both = "the lockfile was resolved with Ruby ${toString locked}, and this environment is built with Ruby ${toString actual}";
+    in
+    if locked == null || locked == actual then
+      null
+    else if rubyAbi locked != rubyAbi actual then
+      {
+        level = "error";
+        message = "gems4nix: ${both}. Gems install under lib/ruby/gems/${rubyAbi actual}.0 and native extensions compile against that ABI, so nothing built here would match the lockfile. Pass a matching `ruby` to gemfileEnv, or relock with the Ruby you build against.";
+      }
+    else
+      {
+        level = "warning";
+        message = "gems4nix: ${both}. They share an ABI, so the environment builds; a gem whose required_ruby_version falls between the two will not install.";
+      };
+
   # ── lockfile-level assembly (pure, no IO) ────────────────────
 
   # Parse the full content of a Gemfile.lock into its checksum, GEM, GIT and
@@ -778,6 +811,8 @@ in
     parseDependenciesSection
     takeDependenciesSection
     parseRubyVersion
+    rubyAbi
+    rubyVersionVerdict
     parseLockfile
     indexRemotes
     mergeGemMetadata

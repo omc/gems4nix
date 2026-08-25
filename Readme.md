@@ -108,6 +108,9 @@ source "https://rubygems.pkg.github.com/omc" do
 end
 ```
 
+**"gems4nix: the lockfile was resolved with Ruby X, and this environment is built with Ruby Y"**
+The `RUBY VERSION` section of your lockfile names a Ruby whose major.minor differs from the one `gemfileEnv` builds against. Gems install under `lib/ruby/gems/<major>.<minor>.0` and native extensions compile against that ABI, so every gem in the environment would be built for a Ruby the lockfile does not describe. Pass a matching `ruby` to `gemfileEnv`, or re-run `bundle lock` under the Ruby you build against. The same message at warning level, which does not stop the build, means the two differ only below the ABI. See [The Ruby the lockfile was resolved with](#the-ruby-the-lockfile-was-resolved-with).
+
 **"gems4nix: PLUGIN SOURCE sections are not supported"**
 Your lockfile has a `PLUGIN SOURCE` section, written by a Bundler plugin that supplies gems from somewhere gems4nix does not know how to fetch. There is no way to build those gems here. Remove the plugin from the `Gemfile` and re-run `bundle lock`, or vendor the gems it provides as a `PATH` source.
 
@@ -195,6 +198,23 @@ A `GEM` section names the remotes its gems come from, and gems4nix gives every g
 Only the four-space lines under `specs:` are gems of a section. The six-space lines below each one name that gem's dependencies, which another section may well provide.
 
 A gem that two `GEM` sections both claim is an evaluation error. Bundler locks a resolved gem under the single source that resolved it, so this is not a lockfile it writes, and it has no rule that would pick a winner — faced with the same ambiguity during resolution it tells you to name the source in the `Gemfile`. gems4nix says the same rather than taking whichever section came first, which would read as a decision and is not.
+
+### The Ruby the lockfile was resolved with
+
+Bundler writes a `RUBY VERSION` section when the `Gemfile` declares a `ruby` requirement, recording the Ruby that resolution actually ran on:
+
+```
+RUBY VERSION
+   ruby 3.4.9p183
+```
+
+gems4nix compares it against the `ruby` it builds with, and how loudly depends on where they differ:
+
+- **A different major.minor is an evaluation error.** Gems install under `lib/ruby/gems/<major>.<minor>.0` and native extensions compile against that ABI, so the whole environment would be built for a Ruby the lockfile does not describe. Pass a matching `ruby`, or relock.
+- **A difference below that is a warning** and the build proceeds. The requirement Bundler enforces at runtime lives in the `Gemfile`, not here — a `Gemfile` asking for `ruby '~> 3.3'` is satisfied by every 3.3.x, and this section only records which one resolution happened to use. The one thing that can still bite is a gem whose `required_ruby_version` falls between the two.
+- **A lockfile with no `RUBY VERSION` section is not checked**, because there is nothing to check it against.
+
+The patchlevel is ignored. A `ruby` derivation's `version` never carries one, so there is nothing to compare it to.
 
 ### Platform resolution
 

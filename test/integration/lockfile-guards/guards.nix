@@ -65,9 +65,37 @@ let
         "https://rubygems.org/gems/rake-13.3.1.gem"
       ];
 
+  # The Ruby version is written against pkgs.ruby rather than fixed in a
+  # fixture, so a nixpkgs that moves to another Ruby cannot turn the
+  # same-ABI case into a cross-ABI one and quietly invert both tests.
+  rubyAbi = pkgs.lib.concatStringsSep "." (
+    pkgs.lib.lists.take 2 (pkgs.lib.splitString "." pkgs.ruby.version)
+  );
+
+  lockfileWithRubyVersion =
+    version:
+    pkgs.writeText "ruby-version-${version}.lock" ''
+      ${builtins.readFile ./Gemfile.lock}
+      RUBY VERSION
+         ruby ${version}
+    '';
+
+  test_ruby_version_across_the_abi_rejected = assertThrows "a lockfile resolved against another Ruby ABI is an evaluation error" (
+    drvPathFor (lockfileWithRubyVersion "2.7.8")
+  );
+
+  # Below the ABI nothing moves, and the requirement Bundler enforces is the
+  # Gemfile's rather than this value, so the environment still builds.
+  test_ruby_version_below_the_abi_still_builds =
+    assertEq "a lockfile resolved against another teeny of the same Ruby still builds"
+      (pkgs.lib.hasSuffix ".drv" (drvPathFor (lockfileWithRubyVersion "${rubyAbi}.999")))
+      true;
+
 in
 test_valid_lockfile_evaluates
 && test_unexplained_hashless_rejected
 && test_plugin_source_rejected
 && test_duplicate_gem_across_sections_rejected
 && test_two_remotes_reach_the_fetch
+&& test_ruby_version_across_the_abi_rejected
+&& test_ruby_version_below_the_abi_still_builds
