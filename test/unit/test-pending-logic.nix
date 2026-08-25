@@ -52,8 +52,16 @@ let
     # result is a gem built from the wrong source, or one built with no git
     # index and therefore no files.
     #
-    # `preBuild` and `postInstall` are not affected. The wrapper keeps a user
-    # value for those and adds its own after it.
+    # `preBuild` and `postInstall` are composed rather than replaced, so a
+    # caller keeps both. The ordering is not symmetric and cannot be: the
+    # wrapper's git-init runs after a caller's `preBuild`, so it indexes
+    # whatever that produced, while the empty-gem check runs before a caller's
+    # `postInstall`, so an `exit` there cannot skip it.
+    #
+    # The `preBuild` side is still reachable by this same defect: a gemConfig
+    # entry whose `preBuild` exits ends the build before the gem is ever built.
+    # The empty-gem check catches the result, because there is then nothing
+    # installed for it to find.
     #
     # THEORIZED FIX
     # Refuse the combination. A gemConfig entry may not set `src`,

@@ -44,7 +44,7 @@
 
    Two more jobs run beside it. `unit` evaluates the standalone `test/unit/test-*.nix` wrappers, which reach the same logic through an unpinned `fetchTarball` rather than through the flake's `pkgs.lib`. `examples` runs `nix flake check` in each of `examples/{simple,medium,complex}`, which cannot join the root flake: they are standalone flakes with a `path:../..` input, and pulling them in would be a self-reference cycle. CI is `x86_64-linux` only.
 
-   No test gates this one, and none can: what CI runs is evidence produced by a run, not an assertion the suite can make about itself. The thirteen checks `nix flake check` executes are `unit-parse`, `unit-resolve`, `unit-pipeline`, `unit-credentials`, `unit-arguments`, `unit-pending`, `credentials-wiring`, `arguments-strictness`, `lockfile-guards`, `gem-src-overrides`, `ruby-override-wiring`, `integration-platform-gems` and `integration-gemspec-directive`.
+   No test gates this one, and none can: what CI runs is evidence produced by a run, not an assertion the suite can make about itself. The thirteen checks `nix flake check` executes are `unit-parse`, `unit-resolve`, `unit-pipeline`, `unit-credentials`, `unit-arguments`, `unit-pending`, `credentials-wiring`, `arguments-strictness`, `lockfile-guards`, `git-path-wiring`, `ruby-override-wiring`, `integration-platform-gems` and `integration-gemspec-directive`.
 
 7. **Open. `gem-groups.rb` group propagation may over-propagate.**
    The Ruby script iterates all specs and propagates groups through

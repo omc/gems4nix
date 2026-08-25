@@ -106,10 +106,11 @@
             }) "PASS"
           );
 
-          # Asserts gemSrcOverrides reaches the build and rejects a name it
-          # cannot match.
-          gem-src-overrides = pkgs.writeText "gem-src-overrides" (
-            builtins.deepSeq (import ./test/integration/gem-src-overrides/wiring.nix {
+          # Asserts the git/path build wrapper's contract with a caller's
+          # gemConfig: gemSrcOverrides reaches the build, and the empty-gem
+          # check runs where a gemConfig postInstall cannot skip it.
+          git-path-wiring = pkgs.writeText "git-path-wiring" (
+            builtins.deepSeq (import ./test/integration/git-path-wiring/wiring.nix {
               inherit pkgs gemfileEnv;
             }) "PASS"
           );

@@ -209,21 +209,35 @@ let
                 fi
               '';
               # An empty gem gives no error until someone calls `require`.
-              # Check here instead. buildRubyGem sets $GEM_HOME before this.
-              postInstall = ''
-                ${attrs.postInstall or ""}
-                gems4nixSpec="$GEM_HOME/specifications/${attrs.gemName}-${attrs.version}.gemspec"
-                gems4nixDir="$GEM_HOME/gems/${attrs.gemName}-${attrs.version}"
-                if [ ! -f "$gems4nixSpec" ]; then
-                  echo "gems4nix: ${attrs.gemName} installed no gemspec at $gems4nixSpec" >&2
-                  exit 1
-                fi
-                if [ -z "$(ls -A "$gems4nixDir" 2>/dev/null)" ]; then
-                  echo "gems4nix: ${attrs.gemName} installed an empty $gems4nixDir;" >&2
-                  echo "  its gemspec probably computed an empty spec.files (git ls-files)." >&2
-                  exit 1
-                fi
-              '';
+              # Check here instead.
+              #
+              # This runs before any caller-supplied postInstall, not after.
+              # runHook evals a hook in the builder's own shell, so an `exit`
+              # anywhere in a gemConfig entry ends the build then and there,
+              # reporting success. Anything appended after it never runs, and
+              # neither does a later phase. Going first is what makes the check
+              # unskippable.
+              #
+              # $out rather than $GEM_HOME: buildRubyGem exports that variable
+              # inside installPhase, and this text is not tied to that phase.
+              postInstall =
+                let
+                  gemRoot = "$out/${ruby.gemPath}";
+                in
+                ''
+                  gems4nixSpec="${gemRoot}/specifications/${attrs.gemName}-${attrs.version}.gemspec"
+                  gems4nixDir="${gemRoot}/gems/${attrs.gemName}-${attrs.version}"
+                  if [ ! -f "$gems4nixSpec" ]; then
+                    echo "gems4nix: ${attrs.gemName} installed no gemspec at $gems4nixSpec" >&2
+                    exit 1
+                  fi
+                  if [ -z "$(ls -A "$gems4nixDir" 2>/dev/null)" ]; then
+                    echo "gems4nix: ${attrs.gemName} installed an empty $gems4nixDir;" >&2
+                    echo "  its gemspec probably computed an empty spec.files (git ls-files)." >&2
+                    exit 1
+                  fi
+                  ${attrs.postInstall or ""}
+                '';
             }
           );
 
