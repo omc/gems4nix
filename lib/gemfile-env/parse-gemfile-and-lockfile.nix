@@ -154,12 +154,7 @@ let
   # parseDependencies operates on raw lines (preserving indentation), and a
   # GIT or PATH block is indented exactly like a GEM one. Sections are merged;
   # entries for the same gem name merge their dep lists.
-  specSectionIndices = helpers.findIndices (
-    l:
-    l == "GEM"
-    || l == "GIT"
-    || l == "PATH"
-  ) lines;
+  specSectionIndices = helpers.findIndices (l: l == "GEM" || l == "GIT" || l == "PATH") lines;
   specSectionRawLines = lib.lists.map (i: helpers.takeLines i lines) specSectionIndices;
   depGraphs = lib.lists.map parseDependencies specSectionRawLines;
   depGraph = builtins.foldl' (

@@ -139,8 +139,8 @@ let
         '';
         result = parseLockfile lockfile;
       in
-      assertEq "pending: parseLockfile must report the locked ruby version" (result.rubyVersion or null)
-        "3.4.9";
+      assertEq "pending: parseLockfile must report the locked ruby version" (result.rubyVersion or null
+      ) "3.4.9";
   };
 
   # Limitations with no test. Each says why, and what a test would need.

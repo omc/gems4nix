@@ -739,11 +739,13 @@ let
     assertEq "parseSpecLine: pre-release version kept whole" result.version "0.5.1-beta.1"
     && assertEq "parseSpecLine: pre-release version is not a platform" result.platform "ruby";
 
-  test_parseSpecLine_bad_version_throws =
-    assertThrows "parseSpecLine: version without parens throws" (parseSpecLine "    errgonomic 0.5.1");
+  test_parseSpecLine_bad_version_throws = assertThrows "parseSpecLine: version without parens throws" (
+    parseSpecLine "    errgonomic 0.5.1"
+  );
 
-  test_parseSpecLine_missing_version_throws =
-    assertThrows "parseSpecLine: name with no version throws" (parseSpecLine "    errgonomic");
+  test_parseSpecLine_missing_version_throws = assertThrows "parseSpecLine: name with no version throws" (
+    parseSpecLine "    errgonomic"
+  );
 
   # ── parseGitSection ──────────────────────────────────────────
 
