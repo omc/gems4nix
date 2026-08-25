@@ -16,7 +16,10 @@ flowchart TD
 ## Key Design Decisions
 
 1. Parse the lockfile in pure Nix (no bundix, no gemset.nix). Group extraction
-   uses a Ruby IFD because Gemfile semantics are Bundler's domain.
+   uses a Ruby IFD because groups are not in the lockfile to read: Bundler's
+   `Dependency#to_lock` never writes them and its `LockfileParser` reads every
+   dependency back as `[:default]`. They live in the Gemfile, where arbitrary
+   Ruby can produce them, so Bundler is what evaluates them.
 2. Prefer precompiled native gems over source compilation.
 3. Only apply gemConfig overrides to ruby-platform gems (precompiled gems
    should not need source build patches).
@@ -37,9 +40,11 @@ flowchart TD
    file RubyGems reads to find a gem on `GEM_PATH`, and `type = "git"` also
    wants a `sha256` that a `Gemfile.lock` does not record.
 8. A lockfile gems4nix cannot honour is an evaluation error, never a gem
-   quietly missing from the environment. A hashless `CHECKSUMS` line no source
-   claims, a `PLUGIN SOURCE` section, a `glob:` option and an unrecognised key
-   on a source section all throw. A dropped gem turns into a `LoadError` much
+   quietly missing from the environment or fetched from somewhere the lockfile
+   did not say. A hashless `CHECKSUMS` line no source claims, a `PLUGIN SOURCE`
+   section, a `glob:` option, an unrecognised key on a source section, a gem
+   two `GEM` sections both claim, and a hashed `CHECKSUMS` line no `GEM`
+   section provides all throw. A dropped gem turns into a `LoadError` much
    later, in a layer that is not at fault.
 9. Stay unopinionated about where that secret comes from. A consumer names
    either a file path (`netrcFile`, needing no daemon configuration) or two
@@ -51,6 +56,16 @@ flowchart TD
     setup hook exports `GEM_HOME` so Bundler looks there. Both views rather
     than one: moving the gem to satisfy Bundler would break the plain
     `require` that a consumer who never boots through Bundler relies on.
+11. A `GEM` section's gems are its four-space spec lines, and its remotes are
+    every `remote:` line it carries, kept in the lockfile's order because that
+    is Bundler's source-priority order. A six-space line names a dependency
+    another section may provide, so counting it here would claim this section's
+    remote for a gem that is not on it.
+12. A `RUBY VERSION` the lockfile and the `ruby` argument disagree on throws
+    across the ABI and warns below it. Gems install under
+    `lib/ruby/gems/<major>.<minor>.0`, so a difference there is every gem; below
+    it, the requirement Bundler enforces is the Gemfile's rather than this
+    value, which records only which Ruby resolution happened to run on.
 
 ## What We Use from Nixpkgs
 
