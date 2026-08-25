@@ -226,9 +226,39 @@ gemfileEnv {
 
 The value can also be a function, which receives the gem's parsed `source` and returns the `src` to use. Naming a gem with no `GIT` or `PATH` source is an evaluation error, so a misspelled name fails loudly rather than falling back to the network fetch you were avoiding.
 
+`root` must be a Nix **path**, not a string. A `.` or `..` in a `remote:` is resolved by path arithmetic, and a string is never copied into the store. The default — the directory holding the `Gemfile` — is wrong in one common case: a `Gemfile` generated with `writeText` lives in `/nix/store`, and every path remote would then resolve against that. Pass `root` explicitly there:
+
+```nix
+gemfileEnv {
+  name = "app-gems";
+  gemfile = pkgs.writeText "Gemfile" gemfileText;
+  gemfileLock = ./Gemfile.lock;
+  root = ./.;
+}
+```
+
+A `PATH` source that does not exist under `root` is an evaluation error naming `root`, not a silent skip.
+
+### Git gems do not work under `require "bundler/setup"`
+
+Read this before putting a git gem in a Rails app.
+
+gems4nix installs a git gem as an ordinary gem, so plain `require` finds it through the `GEM_PATH`. Bundler does not. `Bundler::Source::Git` looks for a git gem in `bundler/gems/<name>-<shortrev>` under Bundler's install path — `GEM_HOME` unless `BUNDLE_PATH` says otherwise — and nowhere else. So an app that boots with `require "bundler/setup"`, which is every stock Rails app, fails on the git gem:
+
+```
+bundler/source/git.rb:236:in `rescue in load_spec_files':
+  https://github.com/omc/errgonomic.git (at main@f06314a) is not yet
+  checked out. Run `bundle install` first. (Bundler::GitError)
+```
+
+That transcript is bundler 2.5.22; the line number moves between releases, and the raise sits in `load_spec_files` either way.
+
+Gems from `GEM` and `PATH` sections are unaffected. Bundler resolves a rubygems gem through `Gem::Specification`, which reads the `GEM_PATH`, and it reads a path gem's gemspec straight out of its directory. Only `GIT` sources break.
+
+Until this is fixed, vendor the gem and depend on it as a `PATH` source, or publish it to a registry. A vendored path gem loads under `bundler/setup` with no `bundle install`.
+
 A lockfile gems4nix cannot honour is an evaluation error rather than a gem missing from the environment: a hashless `CHECKSUMS` line no source claims, a `PLUGIN SOURCE` section, a `glob:` option, and any unrecognised key on a `GIT` or `PATH` section all throw and name what they found.
 
-See [Known Limitations](#known-limitations) before relying on a git gem. The largest one is that Bundler cannot see it.
 
 ## Configuration
 
