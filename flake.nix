@@ -91,6 +91,14 @@
             }) "PASS"
           );
 
+          # Asserts a lockfile gems4nix cannot honour throws rather than
+          # dropping the gem it cannot build.
+          lockfile-guards = pkgs.writeText "lockfile-guards" (
+            builtins.deepSeq (import ./test/integration/lockfile-guards/guards.nix {
+              inherit pkgs gemfileEnv;
+            }) "PASS"
+          );
+
           # Asserts an overridden `ruby` reaches the gems, not just GEM_PATH.
           ruby-override-wiring = pkgs.writeText "ruby-override-wiring" (
             builtins.deepSeq (import ./test/integration/ruby-override/wiring.nix {
