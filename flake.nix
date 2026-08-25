@@ -91,6 +91,13 @@
             }) "PASS"
           );
 
+          # Asserts an overridden `ruby` reaches the gems, not just GEM_PATH.
+          ruby-override-wiring = pkgs.writeText "ruby-override-wiring" (
+            builtins.deepSeq (import ./test/integration/ruby-override/wiring.nix {
+              inherit pkgs gemfileEnv;
+            }) "PASS"
+          );
+
           integration-platform-gems =
             pkgs.runCommand "integration-platform-gems"
               {

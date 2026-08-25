@@ -141,7 +141,9 @@ let
             else
               authenticated;
         in
-        buildRubyGem traced
+        # buildRubyGem defaults to nixpkgs' Ruby. Left to it, an overridden
+        # `ruby` would move GEM_PATH without moving the gems it points at.
+        buildRubyGem (traced // { inherit ruby; })
       ) platformResolvedGemsByName;
     in
     argHelpers.checkArgs "gemfileEnv" gemfileEnv args (buildEnv {
