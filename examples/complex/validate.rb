@@ -57,27 +57,27 @@ rescue StandardError => e
   failures << "bootsnap: #{e.message}"
 end
 
-# errgonomic: from git source (TODO #13: git sources)
-# Expected to fail until git source parsing is implemented.
+# errgonomic: from a GIT lockfile section.
+# It loads its railtie whenever Rails::Railtie is defined, and that railtie
+# references ActiveModel and ActiveRecord constants at class-definition time.
+# `require 'rails'` alone does not pull those in (a real app gets them from the
+# framework boot), so require them here. Nothing to do with gem sourcing.
 begin
+  require 'active_model'
+  require 'active_record'
   require 'errgonomic'
   puts "OK  errgonomic #{Errgonomic::VERSION}"
-rescue LoadError => e
-  puts 'SKIP  errgonomic (git source not yet supported: TODO #13)'
 rescue StandardError => e
   failures << "errgonomic: #{e.message}"
 end
 
-# hello_gem: from path source (TODO #13: path sources)
-# Expected to fail until path source parsing is implemented.
+# hello_gem: from a PATH lockfile section
 begin
   require 'hello_gem'
   msg = HelloGem.greet
   raise "greet returned #{msg.inspect}" unless msg == 'hello from gems4nix'
 
   puts "OK  hello_gem #{HelloGem::VERSION}"
-rescue LoadError => e
-  puts 'SKIP  hello_gem (path source not yet supported: TODO #13)'
 rescue StandardError => e
   failures << "hello_gem: #{e.message}"
 end
