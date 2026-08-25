@@ -85,6 +85,61 @@ let
 
   # File mode needs no impure environment variable, which is the whole reason
   # it exists: it works without touching the daemon's environment.
+  # Two private registries on one GEM section. fetchurl falls through to the
+  # second url when the first fails, so a netrc naming only one host turns that
+  # fallback into a bare 401 with none of the diagnostics above.
+  twoRegistries = gemfileEnv {
+    name = "credentials-two-registries";
+    gemfile = ./Gemfile;
+    gemfileLock = ./two-registries.lock;
+    groups = [ "default" ];
+    platforms = [ "ruby" ];
+    gemGroups = {
+      rake = [ "default" ];
+    };
+    credentials = {
+      "gems.example.invalid" = {
+        usernameVar = "FIRST_USER";
+        passwordVar = "FIRST_TOKEN";
+      };
+      "gems.private.invalid".netrcFile = "/run/secrets/second-netrc";
+    };
+  };
+
+  twoRegistryPhase = (pkgs.lib.head twoRegistries.paths).src.drvAttrs.netrcPhase;
+
+  test_every_credentialed_remote_reaches_the_netrc =
+    assertEq "both registries are named in the one netrc"
+      [
+        (pkgs.lib.strings.hasInfix "machine gems.example.invalid login" twoRegistryPhase)
+        (pkgs.lib.strings.hasInfix "cat \"/run/secrets/second-netrc\" >> netrc" twoRegistryPhase)
+      ]
+      [
+        true
+        true
+      ];
+
+  # fetchurl brings its own impure variables, so compare against an
+  # uncredentialed gem rather than against a literal list.
+  test_every_env_credential_is_impure =
+    assertEq "the env-mode registry contributes exactly its two variables"
+      (pkgs.lib.subtractLists (pkgs.lib.head plain.paths).src.drvAttrs.impureEnvVars (pkgs.lib.head twoRegistries.paths)
+      .src.drvAttrs.impureEnvVars)
+      [
+        "FIRST_USER"
+        "FIRST_TOKEN"
+      ];
+
+  # Both urls are on the fetch, so both had to be credentialed. Without this
+  # the netrc assertion could pass on a gem that only ever tries one of them.
+  test_both_registries_are_on_the_fetch =
+    assertEq "the gem is fetched from both registries, highest priority first"
+      (pkgs.lib.head twoRegistries.paths).src.urls
+      [
+        "https://gems.private.invalid/gems/rake-13.3.1.gem"
+        "https://gems.example.invalid/gems/rake-13.3.1.gem"
+      ];
+
   test_file_mode_adds_no_impure_vars = assertEq "netrcFile adds no impure environment variables" (
     pkgs.lib.concatMap
     (gem: gem.src.drvAttrs.impureEnvVars)
@@ -99,3 +154,6 @@ test_urls_match_buildRubyGem
 && test_file_mode_urls_match_buildRubyGem
 && test_file_mode_path_not_in_store
 && test_file_mode_adds_no_impure_vars
+&& test_every_credentialed_remote_reaches_the_netrc
+&& test_every_env_credential_is_impure
+&& test_both_registries_are_on_the_fetch

@@ -29,7 +29,9 @@ flowchart TD
    secret reaches curl through a netrc in the build directory and never through
    the store. `buildRubyGem` builds its `src` from `source.remotes` and
    `source.sha256` alone, so a gem on a credentialed remote gets a `src` we
-   construct instead.
+   construct instead. One netrc covers every credentialed remote of a gem,
+   because `fetchurl` falls through to the next url on failure and a fallback
+   with no credential is a bare 401.
 6. `gemfileEnv` rejects an argument it does not declare. A consumer pinned to a
    version predating a feature has to learn that at the call site; the
    alternative is a successful evaluation that ignores the argument and fails

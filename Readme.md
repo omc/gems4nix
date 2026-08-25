@@ -383,6 +383,8 @@ A gem hosted on a private registry needs a credential inside the Nix build sandb
 
 The key is a bare host, matched against the remote each gem is fetched from. Gems on remotes you did not name are fetched unauthenticated, exactly as before. If you name a host no gem uses, gems4nix warns. That is almost always a typo.
 
+A gem whose `GEM` section carries several remotes is fetched from each in turn until one serves it, so every credentialed remote among them gets its own entry in that gem's netrc — modes may be mixed, one host from a file and another from environment variables. Credentialing only the first would turn the fallback into a bare 401 with none of the diagnostics below.
+
 Either way the secret stays out of the Nix store: gems4nix writes a netrc into the build directory, which is discarded with the build.
 
 ### Mode 1: from a file you control

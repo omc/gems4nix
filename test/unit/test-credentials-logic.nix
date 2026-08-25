@@ -14,7 +14,7 @@ let
     hostOf
     credentialMode
     validateCredentials
-    credentialFor
+    credentialsFor
     gemSuffix
     gemUrls
     netrcFetchAttrs
@@ -43,6 +43,43 @@ let
       sha256 = "deadbeef";
       remotes = [ "https://rubygems.pkg.github.com/example-org/gems" ];
       type = "gem";
+    };
+  };
+
+  # Two private registries on one GEM section. Bundler deprecates the Gemfile
+  # that produces this, but it writes the lockfile, so it has to work.
+  twoPrivateCreds = {
+    "gems.example.com" = {
+      usernameVar = "OTHER_USER";
+      passwordVar = "OTHER_TOKEN";
+    };
+    "rubygems.pkg.github.com".netrcFile = "/run/secrets/gem-registry-netrc";
+  };
+
+  twoRemoteGem = privateGem // {
+    source = privateGem.source // {
+      remotes = [
+        "https://gems.example.com/private"
+        "https://rubygems.pkg.github.com/example-org/gems"
+      ];
+    };
+  };
+
+  mixedRemoteGem = privateGem // {
+    source = privateGem.source // {
+      remotes = [
+        "https://gems.example.com/private"
+        "https://rubygems.org"
+      ];
+    };
+  };
+
+  repeatedHostGem = privateGem // {
+    source = privateGem.source // {
+      remotes = [
+        "https://rubygems.pkg.github.com/example-org/gems"
+        "https://rubygems.pkg.github.com/another-org/gems"
+      ];
     };
   };
 
@@ -172,23 +209,23 @@ let
 
   test_netrcFile_no_impure_env_vars =
     let
-      attrs = netrcFetchAttrs (credentialFor fileCreds privateGem);
+      attrs = netrcFetchAttrs (credentialsFor fileCreds privateGem);
     in
     assertEq "file mode declares no impure environment variables" (attrs ? netrcImpureEnvVars) false;
 
   test_netrcFile_copies_the_file =
     let
-      attrs = netrcFetchAttrs (credentialFor fileCreds privateGem);
+      attrs = netrcFetchAttrs (credentialsFor fileCreds privateGem);
     in
     assertEq "file mode copies the netrc into the build directory"
-      (lib.strings.hasInfix "cp \"/run/secrets/gem-registry-netrc\" netrc" attrs.netrcPhase)
+      (lib.strings.hasInfix "cat \"/run/secrets/gem-registry-netrc\" >> netrc" attrs.netrcPhase)
       true;
 
   # The permission trap from the issue: an unreadable path is indistinguishable
   # from a missing one, so the error has to name both causes.
   test_netrcFile_error_names_traversal =
     let
-      attrs = netrcFetchAttrs (credentialFor fileCreds privateGem);
+      attrs = netrcFetchAttrs (credentialsFor fileCreds privateGem);
     in
     assertEq "the unreadable-netrc error explains the traversal trap"
       (lib.strings.hasInfix "traverse" attrs.netrcPhase)
@@ -196,37 +233,61 @@ let
 
   test_netrcFile_error_names_sandbox_paths =
     let
-      attrs = netrcFetchAttrs (credentialFor fileCreds privateGem);
+      attrs = netrcFetchAttrs (credentialsFor fileCreds privateGem);
     in
     assertEq "the unreadable-netrc error names extra-sandbox-paths"
       (lib.strings.hasInfix "extra-sandbox-paths = /run/secrets/gem-registry-netrc" attrs.netrcPhase)
       true;
 
-  # ── credentialFor ──────────────────────────────────────────────
+  # ── credentialsFor ─────────────────────────────────────────────
 
-  test_credentialFor_match =
+  test_credentialsFor_match =
     let
-      cred = credentialFor githubCreds privateGem;
+      creds = credentialsFor githubCreds privateGem;
     in
     assertEq "a gem on a credentialed remote resolves its credential"
-      {
-        inherit (cred) host usernameVar passwordVar;
-      }
-      {
-        host = "rubygems.pkg.github.com";
-        usernameVar = "GEM_REGISTRY_USER";
-        passwordVar = "GEM_REGISTRY_TOKEN";
-      };
+      (map (c: { inherit (c) host usernameVar passwordVar; }) creds)
+      [
+        {
+          host = "rubygems.pkg.github.com";
+          usernameVar = "GEM_REGISTRY_USER";
+          passwordVar = "GEM_REGISTRY_TOKEN";
+        }
+      ];
 
-  test_credentialFor_no_match =
-    assertEq "a gem on a public remote has no credential" (credentialFor githubCreds publicGem)
-      null;
+  test_credentialsFor_no_match =
+    assertEq "a gem on a public remote has no credential" (credentialsFor githubCreds publicGem)
+      [ ];
 
-  test_credentialFor_empty_credentials = assertEq "no credentials declared means no credential" (
-    credentialFor
+  test_credentialsFor_empty_credentials = assertEq "no credentials declared means no credential" (
+    credentialsFor
     { }
     privateGem
-  ) null;
+  ) [ ];
+
+  # Every credentialed remote a gem may be fetched from needs its own netrc
+  # entry: fetchurl falls through to the next url on failure, and a fallback
+  # with no credential is a bare 401 rather than a diagnostic.
+  test_credentialsFor_covers_every_remote =
+    assertEq "each credentialed remote of a gem contributes a credential"
+      (map (c: c.host) (credentialsFor twoPrivateCreds twoRemoteGem))
+      [
+        "gems.example.com"
+        "rubygems.pkg.github.com"
+      ];
+
+  test_credentialsFor_skips_uncredentialed_remotes =
+    assertEq "a public remote beside a private one contributes nothing"
+      (map (c: c.host) (credentialsFor twoPrivateCreds mixedRemoteGem))
+      [ "gems.example.com" ];
+
+  # Two remotes can differ only in their path, which is one host and one
+  # credential. A netrc with the machine line twice is not wrong, but it says
+  # the entry was resolved twice, and the first match is the one curl uses.
+  test_credentialsFor_dedupes_a_repeated_host =
+    assertEq "two remotes on one host resolve to one credential"
+      (map (c: c.host) (credentialsFor githubCreds repeatedHostGem))
+      [ "rubygems.pkg.github.com" ];
 
   # ── gemSuffix (mirrors buildRubyGem) ───────────────────────────
 
@@ -248,7 +309,7 @@ let
 
   test_netrcFetchAttrs_impure_env_vars =
     let
-      attrs = netrcFetchAttrs (credentialFor githubCreds privateGem);
+      attrs = netrcFetchAttrs (credentialsFor githubCreds privateGem);
     in
     assertEq "both credential variables are declared impure" attrs.netrcImpureEnvVars [
       "GEM_REGISTRY_USER"
@@ -257,7 +318,7 @@ let
 
   test_netrcFetchAttrs_writes_machine_line =
     let
-      attrs = netrcFetchAttrs (credentialFor githubCreds privateGem);
+      attrs = netrcFetchAttrs (credentialsFor githubCreds privateGem);
     in
     assertEq "netrcPhase writes a machine line for the host"
       (lib.strings.hasInfix "machine rubygems.pkg.github.com login \${GEM_REGISTRY_USER} password \${GEM_REGISTRY_TOKEN}" attrs.netrcPhase)
@@ -267,15 +328,49 @@ let
   # where it is read from, rather than a bare 401.
   test_netrcFetchAttrs_error_names_host =
     let
-      attrs = netrcFetchAttrs (credentialFor githubCreds privateGem);
+      attrs = netrcFetchAttrs (credentialsFor githubCreds privateGem);
     in
     assertEq "the missing-credential error names the host"
       (lib.strings.hasInfix "rubygems.pkg.github.com" attrs.netrcPhase)
       true;
 
+  test_netrcFetchAttrs_covers_every_credentialed_remote =
+    let
+      attrs = netrcFetchAttrs (credentialsFor twoPrivateCreds twoRemoteGem);
+    in
+    assertEq "the netrc carries a machine line for the env-mode host"
+      (lib.strings.hasInfix "machine gems.example.com login" attrs.netrcPhase)
+      true
+    &&
+      assertEq "the netrc carries the file-mode host's own file"
+        (lib.strings.hasInfix "\"/run/secrets/gem-registry-netrc\" >> netrc" attrs.netrcPhase)
+        true;
+
+  # Every contribution appends. One that overwrote would drop whichever host
+  # was written before it, which is the bug this shape exists to prevent.
+  test_netrcFetchAttrs_appends_rather_than_overwrites =
+    let
+      attrs = netrcFetchAttrs (credentialsFor twoPrivateCreds twoRemoteGem);
+    in
+    assertEq "the netrc is emptied once before anything is written to it"
+      (lib.strings.hasInfix ": > netrc" attrs.netrcPhase)
+      true
+    && assertEq "nothing overwrites the netrc after that" (lib.strings.hasInfix "> netrc" (
+      lib.strings.replaceStrings [ ">> netrc" ": > netrc" ] [ "" "" ] attrs.netrcPhase
+    )) false;
+
+  test_netrcFetchAttrs_impure_vars_cover_every_env_credential =
+    let
+      attrs = netrcFetchAttrs (credentialsFor twoPrivateCreds twoRemoteGem);
+    in
+    assertEq "only the env-mode host's variables are declared impure" attrs.netrcImpureEnvVars [
+      "OTHER_USER"
+      "OTHER_TOKEN"
+    ];
+
   test_netrcFetchAttrs_error_names_daemon =
     let
-      attrs = netrcFetchAttrs (credentialFor githubCreds privateGem);
+      attrs = netrcFetchAttrs (credentialsFor githubCreds privateGem);
     in
     assertEq "the missing-credential error points at the daemon environment"
       (lib.strings.hasInfix "nix-daemon" attrs.netrcPhase)
@@ -309,10 +404,13 @@ let
     && test_netrcFile_copies_the_file
     && test_netrcFile_error_names_traversal
     && test_netrcFile_error_names_sandbox_paths
-    # credentialFor
-    && test_credentialFor_match
-    && test_credentialFor_no_match
-    && test_credentialFor_empty_credentials
+    # credentialsFor
+    && test_credentialsFor_match
+    && test_credentialsFor_no_match
+    && test_credentialsFor_empty_credentials
+    && test_credentialsFor_covers_every_remote
+    && test_credentialsFor_skips_uncredentialed_remotes
+    && test_credentialsFor_dedupes_a_repeated_host
     # gemSuffix / gemUrls
     && test_gemSuffix_ruby
     && test_gemSuffix_native
@@ -321,7 +419,10 @@ let
     && test_netrcFetchAttrs_impure_env_vars
     && test_netrcFetchAttrs_writes_machine_line
     && test_netrcFetchAttrs_error_names_host
-    && test_netrcFetchAttrs_error_names_daemon;
+    && test_netrcFetchAttrs_error_names_daemon
+    && test_netrcFetchAttrs_covers_every_credentialed_remote
+    && test_netrcFetchAttrs_appends_rather_than_overwrites
+    && test_netrcFetchAttrs_impure_vars_cover_every_env_credential;
 
 in
 allTests

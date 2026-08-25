@@ -81,22 +81,25 @@ let
     in
     lib.mapAttrs checkEntry credentials;
 
-  # The credential covering a gem's remote, or null when the remote is public.
-  # Returns the declared entry plus the host it matched, which netrcFetchAttrs
-  # needs for the netrc `machine` line.
-  credentialFor =
+  # Every credential covering a gem's remotes, in the order the remotes are
+  # tried, empty when they are all public. Each entry is the declared one plus
+  # the host it matched, which netrcFetchAttrs needs for the `machine` line.
+  #
+  # All of them, not the first: fetchurl falls through to the next url when one
+  # fails, so a gem served by two private registries needs both in the netrc.
+  # Authenticating only the first turns the fallback into a bare 401, which is
+  # the diagnostic-free failure this whole module exists to remove.
+  #
+  # Deduplicated by host, because two remotes differing only in path are one
+  # host and one credential.
+  credentialsFor =
     credentials: gemAttrs:
     let
-      hosts = map hostOf (gemAttrs.source.remotes or [ ]);
-      matched = builtins.filter (h: credentials ? ${h}) hosts;
+      hosts = lib.unique (map hostOf (gemAttrs.source.remotes or [ ]));
     in
-    if matched == [ ] then
-      null
-    else
-      let
-        host = builtins.head matched;
-      in
-      credentials.${host} // { inherit host; };
+    map (host: credentials.${host} // { inherit host; }) (
+      builtins.filter (h: credentials ? ${h}) hosts
+    );
 
   # Mirrors buildRubyGem's own `suffix` and URL construction. We reproduce them
   # because buildRubyGem builds its `src` internally from `source.remotes` and
@@ -124,62 +127,61 @@ let
     echo >&2 "  downloader, not the curl this derivation runs."
   '';
 
+  # The missing-variable diagnostic, defined once however many env-mode hosts a
+  # gem has. It takes the host and the three variable names as arguments so
+  # that one definition can speak for all of them.
+  missingCredentialHelper = ''
+    gems4nixMissingCredential() {
+      echo >&2 "gems4nix: no credential available for $1"
+      echo >&2 "  \$$2 is unset or empty inside the build sandbox."
+      echo >&2 ""
+      echo >&2 "  gemfileEnv declares this credential as:"
+      echo >&2 "    credentials.\"$1\" = { usernameVar = \"$3\"; passwordVar = \"$4\"; };"
+      echo >&2 ""
+      echo >&2 "  Nix reads impure environment variables from the environment of the"
+      echo >&2 "  process that runs the build. On multi-user Nix that is nix-daemon,"
+      echo >&2 "  not your shell, so exporting the variable interactively has no effect."
+      echo >&2 "  Feed the daemon's environment from a secret file rather than setting"
+      echo >&2 "  the value in your system configuration, which would store it"
+      echo >&2 "  world-readable. Or switch this entry to netrcFile."
+      ${wrongLayerNote}
+      exit 1
+    }
+  '';
+
   # Mode 1: read the credential out of the build environment.
   #
-  # The guard runs before the netrc is written, so an unset variable fails
-  # naming the variable and the environment it is read from rather than
+  # The guard runs before the machine line is written, so an unset variable
+  # fails naming the variable and the environment it is read from rather than
   # producing a 401 twenty lines later.
-  envVarFetchAttrs =
+  envVarPhase =
     {
       host,
       usernameVar,
       passwordVar,
     }:
-    {
-      netrcImpureEnvVars = [
-        usernameVar
-        passwordVar
-      ];
-      netrcPhase = ''
-        gems4nixMissingCredential() {
-          echo >&2 "gems4nix: no credential available for ${host}"
-          echo >&2 "  \$$1 is unset or empty inside the build sandbox."
-          echo >&2 ""
-          echo >&2 "  gemfileEnv declares this credential as:"
-          echo >&2 "    credentials.\"${host}\" = { usernameVar = \"${usernameVar}\"; passwordVar = \"${passwordVar}\"; };"
-          echo >&2 ""
-          echo >&2 "  Nix reads impure environment variables from the environment of the"
-          echo >&2 "  process that runs the build. On multi-user Nix that is nix-daemon,"
-          echo >&2 "  not your shell, so exporting the variable interactively has no effect."
-          echo >&2 "  Feed the daemon's environment from a secret file rather than setting"
-          echo >&2 "  the value in your system configuration, which would store it"
-          echo >&2 "  world-readable. Or switch this entry to netrcFile."
-          ${wrongLayerNote}
-          exit 1
-        }
-        [ -n "''${${usernameVar}:-}" ] || gems4nixMissingCredential ${usernameVar}
-        [ -n "''${${passwordVar}:-}" ] || gems4nixMissingCredential ${passwordVar}
+    ''
+      [ -n "''${${usernameVar}:-}" ] || gems4nixMissingCredential ${host} ${usernameVar} ${usernameVar} ${passwordVar}
+      [ -n "''${${passwordVar}:-}" ] || gems4nixMissingCredential ${host} ${passwordVar} ${usernameVar} ${passwordVar}
 
-        cat > netrc <<EOF
-        machine ${host} login ''${${usernameVar}} password ''${${passwordVar}}
-        EOF
-      '';
-    };
+      cat >> netrc <<EOF
+      machine ${host} login ''${${usernameVar}} password ''${${passwordVar}}
+      EOF
+    '';
 
-  # Mode 2: read the credential out of a file the consumer controls, copied
-  # into the build directory rather than handed to curl by path. The copy keeps
-  # the whole thing inside the supported netrcPhase channel and lets the
+  # Mode 2: read the credential out of a file the consumer controls, appended
+  # to the build directory's netrc rather than handed to curl by path. The copy
+  # keeps the whole thing inside the supported netrcPhase channel and lets the
   # readability check produce a real diagnostic.
   #
   # `[ -r ]` cannot distinguish absent from unreadable, and the difference is
   # the entire trap: a secret under a 0750 home is untraversable to the build
   # user, so stat can only report that it does not exist. The message therefore
   # names both causes instead of guessing.
-  netrcFileFetchAttrs =
+  netrcFilePhase =
     { host, netrcFile }:
-    {
-      netrcPhase = ''
-        if [ ! -r "${netrcFile}" ]; then
+    ''
+      if [ ! -r "${netrcFile}" ]; then
           echo >&2 "gems4nix: cannot read the netrc for ${host} at ${netrcFile}"
           echo >&2 "  The build user cannot read that path. Either it does not exist, or"
           echo >&2 "  it is unreadable — which looks identical from in here, because a"
@@ -194,25 +196,40 @@ let
           echo >&2 ""
           echo >&2 "  On Linux the sandbox also has to expose the path:"
           echo >&2 "    extra-sandbox-paths = ${netrcFile}"
-          ${wrongLayerNote}
-          exit 1
-        fi
-        cp "${netrcFile}" netrc
-      '';
-    };
+        ${wrongLayerNote}
+        exit 1
+      fi
+      cat "${netrcFile}" >> netrc
+    '';
 
-  # fetchurl arguments that authenticate against one host, in whichever mode
-  # the entry declared.
+  # fetchurl arguments that authenticate against every host a gem may be
+  # fetched from, each in whichever mode its entry declared.
+  #
+  # One netrc holds as many `machine` lines as it needs, so every contribution
+  # appends and only the truncation at the top writes. A contribution that
+  # overwrote would drop whichever host was written before it.
   netrcFetchAttrs =
-    credential:
-    if credentialMode credential == "file" then
-      netrcFileFetchAttrs {
-        inherit (credential) host netrcFile;
-      }
-    else
-      envVarFetchAttrs {
-        inherit (credential) host usernameVar passwordVar;
-      };
+    creds:
+    let
+      envCreds = builtins.filter (c: credentialMode c == "env") creds;
+      phaseFor =
+        c:
+        if credentialMode c == "file" then
+          netrcFilePhase { inherit (c) host netrcFile; }
+        else
+          envVarPhase { inherit (c) host usernameVar passwordVar; };
+    in
+    lib.optionalAttrs (envCreds != [ ]) {
+      netrcImpureEnvVars = lib.concatMap (c: [
+        c.usernameVar
+        c.passwordVar
+      ]) envCreds;
+    }
+    // {
+      netrcPhase = lib.concatStringsSep "\n" (
+        [ ": > netrc" ] ++ lib.optional (envCreds != [ ]) missingCredentialHelper ++ map phaseFor creds
+      );
+    };
 
   # Hosts named in `credentials` that no gem in the lockfile actually uses.
   # A typo here is otherwise silent: the credential is simply never applied and
@@ -241,7 +258,7 @@ in
     hostOf
     credentialMode
     validateCredentials
-    credentialFor
+    credentialsFor
     gemSuffix
     gemUrls
     netrcFetchAttrs

@@ -303,9 +303,9 @@ let
           # buildRubyGem derives `src` from source.remotes and source.sha256 alone,
           # with no way to pass fetchurl the netrc arguments. Handing it a finished
           # `src` is the only opening, so gems on a credentialed remote get one.
-          credential = credentialHelpers.credentialFor checkedCredentials configured;
+          gemCredentials = credentialHelpers.credentialsFor checkedCredentials configured;
           authenticated =
-            if credential == null then
+            if gemCredentials == [ ] then
               configured
             else
               configured
@@ -315,12 +315,12 @@ let
                     urls = credentialHelpers.gemUrls configured;
                     inherit (configured.source) sha256;
                   }
-                  // credentialHelpers.netrcFetchAttrs credential
+                  // credentialHelpers.netrcFetchAttrs gemCredentials
                 );
               };
           traced =
             if debug then
-              builtins.trace "gems4nix [debug]: building ${configured.gemName} ${configured.version} (${configured.platform})${lib.optionalString (credential != null) " with credentials for ${credential.host}"}" authenticated
+              builtins.trace "gems4nix [debug]: building ${configured.gemName} ${configured.version} (${configured.platform})${lib.optionalString (gemCredentials != [ ]) " with credentials for ${lib.concatMapStringsSep ", " (c: c.host) gemCredentials}"}" authenticated
             else
               authenticated;
         in
