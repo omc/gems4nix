@@ -114,7 +114,15 @@ let
     "ruby"
   ];
 
-  # Every argument name a pinned consumer repository passes today.
+  # Every argument name a consumer repository passes today, read from each
+  # repository's own call site. Where a repository calls gemfileEnv more than
+  # once, this is the union across its calls.
+  #
+  #   sprout           config/nix/packages.nix
+  #   everything else  flake.nix
+  #
+  # Verify with:
+  #   gh api repos/omc/<repo>/contents/<file> --jq .content | base64 -d
   consumerCallSites = {
     sprout = [
       "name"
@@ -134,15 +142,25 @@ let
       "name"
       "gemfile"
       "gemfileLock"
+      "groups"
       "gemspec"
       "extraFiles"
-      "gemGroups"
     ];
     cio = [
       "name"
       "gemfile"
       "gemfileLock"
       "ruby"
+    ];
+    opportunities = [
+      "name"
+      "gemfile"
+      "gemfileLock"
+    ];
+    team-core = [
+      "name"
+      "gemfile"
+      "gemfileLock"
     ];
   };
 
