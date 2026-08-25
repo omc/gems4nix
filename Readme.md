@@ -114,6 +114,9 @@ The `RUBY VERSION` section of your lockfile names a Ruby whose major.minor diffe
 **"gems4nix: '&lt;gem&gt;' has a checksum but no GEM section provides it"**
 A `CHECKSUMS` line carries a hash, which means the gem came from a `GEM` section, and no `GEM` section in the lockfile lists it. There is nowhere to fetch it from. A hand-edited or truncated lockfile is the usual cause; regenerate it with `bundle lock`.
 
+**"gems4nix: the value of $VAR, the credential for &lt;host&gt;, contains a newline"**
+A netrc entry is a single line, so a credential value carrying a newline would write further lines of its own into the netrc and could claim another host. The usual cause is a secret read from a file with its trailing newline left on. Strip it where the variable is set. gems4nix refuses the same shape at evaluation time for anything it can see then: a newline in a `credentials` key, a `usernameVar` or `passwordVar` that is not a shell identifier, and a `netrcFile` path containing a character the shell acts on.
+
 **"gems4nix: PLUGIN SOURCE sections are not supported"**
 Your lockfile has a `PLUGIN SOURCE` section, written by a Bundler plugin that supplies gems from somewhere gems4nix does not know how to fetch. There is no way to build those gems here. Remove the plugin from the `Gemfile` and re-run `bundle lock`, or vendor the gems it provides as a `PATH` source.
 
@@ -198,7 +201,7 @@ The pipeline has three stages:
 
 A `GEM` section names the remotes its gems come from, and gems4nix gives every gem in that section every one of them. Bundler puts more than one `remote:` line in a single section when a `Gemfile` declares more than one global source, and it looks the last-declared one up first — but the file is written the other way round. `Source::Rubygems#add_remote` unshifts each remote as the `Gemfile` declares it, and `#to_lock` reverses that back, so the lockfile lists them first-declared first. gems4nix reverses the file's order, which makes its list identical to Bundler's own `remotes`, and the fetch then tries them highest-priority first and stops at the first that serves the gem.
 
-Reading the file top to bottom instead would try Bundler's *lowest*-priority source first, which is usually the public `source` line at the top of the `Gemfile` rather than the private registry added below it. Verified against Bundler 2.5.22, 2.6.6 and 2.7.2, which spans every version the consuming repositories lock.
+Reading the file top to bottom instead would try Bundler's *lowest*-priority source first, which is usually the public `source` line at the top of the `Gemfile` rather than the private registry added below it. Verified against Bundler 2.5.22, 2.6.6, 2.6.9 and 2.7.2 by `scripts/bundler-remote-order.rb`, which is also a `nix flake check` check, so a Bundler that changed the ordering shows up as a failing build.
 
 Only the four-space lines under `specs:` are gems of a section. The six-space lines below each one name that gem's dependencies, which another section may well provide.
 
@@ -384,6 +387,8 @@ A gem hosted on a private registry needs a credential inside the Nix build sandb
 The key is a bare host, matched against the remote each gem is fetched from. Gems on remotes you did not name are fetched unauthenticated, exactly as before. If you name a host no gem uses, gems4nix warns. That is almost always a typo.
 
 A gem whose `GEM` section carries several remotes is fetched from each in turn until one serves it, so every credentialed remote among them gets its own entry in that gem's netrc — modes may be mixed, one host from a file and another from environment variables. Credentialing only the first would turn the fallback into a bare 401 with none of the diagnostics below.
+
+Because a netrc entry is one line, anything that could add a line is refused. The host key, the two variable names and the `netrcFile` path are known while Nix evaluates, so a newline in any of them, a variable name that is not a shell identifier, or a path containing a character the shell acts on is an evaluation error naming the host and the field. A variable's *value* is not known until the build runs, so it is checked there instead, before the entry is written. A `netrcFile`'s contents are deliberately exempt: that file is a netrc, so being several lines and several hosts is the point of it.
 
 Either way the secret stays out of the Nix store: gems4nix writes a netrc into the build directory, which is discarded with the build.
 

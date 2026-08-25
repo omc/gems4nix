@@ -31,7 +31,10 @@ flowchart TD
    `source.sha256` alone, so a gem on a credentialed remote gets a `src` we
    construct instead. One netrc covers every credentialed remote of a gem,
    because `fetchurl` falls through to the next url on failure and a fallback
-   with no credential is a bare 401.
+   with no credential is a bare 401. Since a netrc entry is one line, anything
+   that could forge a second one is refused: the host, the variable names and
+   the `netrcFile` path while Nix evaluates, and the variables' values in the
+   build, which is the only place they exist.
 6. `gemfileEnv` rejects an argument it does not declare. A consumer pinned to a
    version predating a feature has to learn that at the call site; the
    alternative is a successful evaluation that ignores the argument and fails
@@ -93,6 +96,11 @@ lib/gemfile-env/
   parse-gemfile-and-lockfile.nix  IO shell: readFile, runCommand, calls parse.nix.
   gem-configs.nix                 Local per-gem build overrides.
   gem-groups.rb                   Ruby IFD script for Gemfile group extraction.
+
+scripts/
+  bundler-remote-order.rb         Measures how Bundler writes and reads a GEM
+                                  section's remote order. Gated by the
+                                  bundler-remote-order check.
 
 test/
   helpers.nix                     Shared assertEq, assertThrows, fixtures.
