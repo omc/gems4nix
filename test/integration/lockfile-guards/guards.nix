@@ -8,10 +8,11 @@
 # The valid lockfile is the positive control. Without it a throw test proves
 # nothing, because any error anywhere in the body would satisfy it.
 #
-# Every assertion goes through `drvPath`: a single shallow attribute, and the
-# one that forces the parsed lockfile. `name` does not. deepSeq on a derivation
-# recurses forever, and the stack overflow that produces is not catchable, so
-# tryEval-based helpers cannot see past it.
+# An assertion about the lockfile as a whole goes through `drvPath`: a single
+# shallow attribute, and the one that forces the parsed lockfile. `name` does
+# not. deepSeq on a derivation recurses forever, and the stack overflow that
+# produces is not catchable, so tryEval-based helpers cannot see past it. An
+# assertion about one gem reads that gem's own attribute instead.
 
 { pkgs, gemfileEnv }:
 
