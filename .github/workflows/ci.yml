@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# Three jobs, because three things can break independently. The root flake's
+# `checks` cover the unit suites and the integration checks. The standalone
+# `test/unit/test-*.nix` wrappers bootstrap nixpkgs through an unpinned
+# fetchTarball, which is a separate code path from the flake's pkgs.lib. And
+# the examples are standalone flakes with a `path:../..` input, which would be
+# a self-reference cycle if pulled into the root flake.
 jobs:
   flake-check:
     name: nix flake check (x86_64-linux)
@@ -20,3 +26,53 @@ jobs:
 
       - name: nix flake check
         run: nix flake check --print-build-logs
+
+  unit:
+    name: unit suites (standalone)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: parse
+        run: nix eval --file test/unit/test-parse.nix --json
+
+      - name: resolve
+        run: nix eval --file test/unit/test-resolve.nix --json
+
+      - name: pipeline
+        run: nix eval --file test/unit/test-pipeline.nix --json
+
+      - name: credentials
+        run: nix eval --file test/unit/test-credentials.nix --json
+
+      - name: arguments
+        run: nix eval --file test/unit/test-arguments.nix --json
+
+      - name: pending ledger
+        run: nix eval --file test/unit/test-pending.nix ledger --json
+
+  examples:
+    name: example (${{ matrix.example }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [simple, medium, complex]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Enable Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      # The complex example has a git-sourced gem, which builtins.fetchGit
+      # fetches at evaluation time. This step needs network access; it is not
+      # substitutable from a binary cache.
+      - name: nix flake check
+        run: nix flake check --no-write-lock-file --print-build-logs
+        working-directory: examples/${{ matrix.example }}

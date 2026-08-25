@@ -728,6 +728,104 @@ let
     in
     assertEq "warnIfNoPlatformGems: no warning when only ruby platforms requested" result platforms;
 
+  # ── git and path sourced gems ────────────────────────────────
+  #
+  # A GIT or PATH spec line carries no platform suffix, so these gems are
+  # always platform "ruby" and pass the platform filter on every system. The
+  # resolve helpers never read `source`, so it arrives unchanged.
+
+  gitSource = {
+    type = "git";
+    url = "https://github.com/omc/errgonomic.git";
+    rev = "f06314af89209f855019219fd198513855be0fd5";
+    fetchSubmodules = false;
+    ref = null;
+    branch = "main";
+    tag = null;
+  };
+
+  gitGem = mkGem {
+    gemName = "errgonomic";
+    version = "0.5.1";
+    source = gitSource;
+  };
+
+  pathGem = mkGem {
+    gemName = "hello_gem";
+    version = "0.1.0";
+    source = {
+      type = "path";
+      path = /tmp/fixture/vendor/hello_gem;
+    };
+  };
+
+  test_filterPlatform_git_gem_all_systems =
+    let
+      accepted = system: filterPlatform (platformsForSystem system) gitGem;
+    in
+    assertEq "filterPlatform: git gem accepted on aarch64-darwin" (accepted "aarch64-darwin") true
+    && assertEq "filterPlatform: git gem accepted on x86_64-darwin" (accepted "x86_64-darwin") true
+    && assertEq "filterPlatform: git gem accepted on aarch64-linux" (accepted "aarch64-linux") true
+    && assertEq "filterPlatform: git gem accepted on x86_64-linux" (accepted "x86_64-linux") true;
+
+  test_filterGroup_git_gem = assertEq "filterGroup: git gem in default group is kept" (filterGroup [
+    "default"
+  ] gitGem) true;
+
+  test_resolve_keeps_git_path_source =
+    let
+      result = resolvePlatforms darwinPrefs [
+        gitGem
+        pathGem
+        gemRake
+      ];
+    in
+    assertEq "resolvePlatforms: git/path gems get their own entries"
+      (builtins.sort builtins.lessThan (builtins.attrNames result))
+      [
+        "errgonomic"
+        "hello_gem"
+        "rake"
+      ]
+    && assertEq "resolvePlatforms: git source survives resolution" result.errgonomic.source.type "git"
+    && assertEq "resolvePlatforms: path source survives resolution" result.hello_gem.source.type "path";
+
+  # A git gem holding no group survives because something kept depends on it.
+  # Without expandTransitiveDeps the group filter drops it, with no error, and
+  # the failure surfaces as a LoadError at runtime.
+  #
+  # This is defensive rather than a fix for an observed failure. A git or path
+  # gem is only in the lockfile because the Gemfile declared its source, which
+  # makes it a top-level dependency, which gives it a group. The gem that
+  # actually arrives groupless is mini_portile2, covered below. The case here
+  # is a GIT section providing several gems where the Gemfile names a subset.
+  test_transitive_git_gem_survives_group_filter =
+    let
+      allGems = [
+        (mkGem {
+          gemName = "rails";
+          version = "8.1.2";
+          groups = [ "default" ];
+        })
+        (gitGem // { groups = [ ]; })
+      ];
+      depGraph = {
+        rails = [ "errgonomic" ];
+        errgonomic = [ ];
+      };
+      platforms = platformsForSystem "aarch64-darwin";
+
+      afterGroupNames = map (g: g.gemName) (builtins.filter (filterGroup [ "default" ]) allGems);
+      expandedNames = expandTransitiveDeps depGraph afterGroupNames;
+      expanded = builtins.filter (g: builtins.elem g.gemName expandedNames) allGems;
+      kept = builtins.attrNames (
+        resolvePlatforms platforms (builtins.filter (filterPlatform platforms) expanded)
+      );
+    in
+    assertEq "a git gem reached through a dependency survives the group filter"
+      (builtins.elem "errgonomic" kept)
+      true;
+
   # ── all tests ────────────────────────────────────────────────
 
   allTests =
@@ -781,6 +879,11 @@ let
     && test_expandTransitiveDeps_empty_initial
     # regression: ruby-only nokogiri keeps build deps (was quarantined)
     && test_ruby_only_nokogiri_keeps_build_deps
+    # git and path sourced gems
+    && test_filterPlatform_git_gem_all_systems
+    && test_filterGroup_git_gem
+    && test_resolve_keeps_git_path_source
+    && test_transitive_git_gem_survives_group_filter
     # error message prefixes (Phase 4)
     && test_platformsForSystem_error_lists_supported
     && test_platformsForSystem_error_mips

@@ -5,7 +5,7 @@
 ```mermaid
 flowchart TD
     input([Gemfile + Gemfile.lock])
-    parse["<b>parse.nix</b> — pure Nix<br/>reads lockfile text<br/>emits { gemName, version, platform, source, sha256, groups }"]
+    parse["<b>parse.nix</b> — pure Nix<br/>reads GEM, GIT and PATH sections<br/>emits { gemName, version, platform, source, groups }"]
     resolve["<b>resolve.nix</b> — pure Nix<br/>filters by group and platform<br/>expands transitive deps<br/>picks one variant per name"]
     build["<b>default.nix</b> — nixpkgs<br/>applies gemConfig<br/>calls buildRubyGem<br/>combines into buildEnv"]
     output([Derivation with all gems on GEM_PATH])
@@ -31,7 +31,17 @@ flowchart TD
    version predating a feature has to learn that at the call site; the
    alternative is a successful evaluation that ignores the argument and fails
    somewhere else entirely.
-7. Stay unopinionated about where that secret comes from. A consumer names
+7. A gem from a GIT or PATH section builds as an ordinary gem with a `src` we
+   supply, not through `buildRubyGem`'s `type = "git"` or `pathDerivation`.
+   Both of those install without a `specifications/*.gemspec`, which is the
+   file RubyGems reads to find a gem on `GEM_PATH`, and `type = "git"` also
+   wants a `sha256` that a `Gemfile.lock` does not record.
+8. A lockfile gems4nix cannot honour is an evaluation error, never a gem
+   quietly missing from the environment. A hashless `CHECKSUMS` line no source
+   claims, a `PLUGIN SOURCE` section, a `glob:` option and an unrecognised key
+   on a source section all throw. A dropped gem turns into a `LoadError` much
+   later, in a layer that is not at fault.
+9. Stay unopinionated about where that secret comes from. A consumer names
    either a file path (`netrcFile`, needing no daemon configuration) or two
    environment variables (needing no readable file). Both fail on different
    machines, so the choice belongs to the consumer, and each mode reports its
@@ -67,7 +77,8 @@ test/
   unit/test-pipeline-logic.nix    End-to-end parse + resolve tests.
   unit/test-credentials-logic.nix Unit tests for credentials.nix.
   unit/test-arguments-logic.nix   Unit tests for arguments.nix and gemfileEnv's argument surface.
-  unit/test-{parse,resolve,pipeline,credentials,arguments}.nix  Wrappers that import logic + lib.
+  unit/test-pending-logic.nix     Known limitations, each asserted to still be one.
+  unit/test-{parse,resolve,pipeline,credentials,arguments,pending}.nix  Wrappers that import logic + lib.
   fixtures/lockfiles/             Lockfile corpus for testing.
   integration/                    Integration tests with real gem builds.
 

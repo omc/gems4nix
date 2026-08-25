@@ -1,5 +1,3 @@
-# TODO: git source
-#
 # IO shell: reads files, runs Ruby for group info, delegates pure logic to
 # parse.nix. All testable logic lives there.
 #
@@ -45,6 +43,9 @@
   gemGroups ? null, # null = auto-detect via gem-groups.rb; attrset = override
   gemspec ? null, # path to *.gemspec when the Gemfile uses the `gemspec` directive
   extraFiles ? { }, # { "relative/dest" = ./src; } — files the gemspec require_relatives
+  # Directory that PATH `remote:` values resolve against. Bundler writes them
+  # relative to the Gemfile, so that is the default.
+  root ? null,
 }:
 
 let
@@ -129,16 +130,33 @@ let
   lines = lib.splitString "\n" content;
   parsed = parseLockfile content;
   gemRemotes = indexRemotes parsed.gemSections;
+
+  pathRoot = if root != null then root else builtins.dirOf gemfile;
+
+  # Check the directories now. A missing one reported here can name `root` and
+  # say what to do. The same mistake found later, inside buildRubyGem, appears
+  # as an unpack error that explains nothing.
+  pathSections = lib.lists.map (
+    section:
+    let
+      resolved = pathRoot + "/${section.remote}";
+    in
+    if builtins.pathExists resolved then
+      section
+    else
+      throw "gems4nix: PATH source '${section.remote}' does not exist at ${toString resolved}. Pass `root` to gemfileEnv if the Gemfile is not co-located with its path gems."
+  ) parsed.pathSections;
+
   resolvedGemGroups =
     if gemGroups != null then gemGroups else builtins.fromJSON (builtins.readFile gemGroupsJson);
 
-  # Build the dependency graph from all GEM sections.
-  # parseDependencies operates on raw lines (preserving indentation).
-  # Multiple GEM sections (multiple remotes) are merged; later entries
-  # for the same gem name merge their dep lists.
-  gemSectionIndices = helpers.findIndices (l: l == "GEM") lines;
-  gemSectionRawLines = lib.lists.map (i: helpers.takeLines i lines) gemSectionIndices;
-  depGraphs = lib.lists.map parseDependencies gemSectionRawLines;
+  # Build the dependency graph from every section that has a `specs:` block.
+  # parseDependencies operates on raw lines (preserving indentation), and a
+  # GIT or PATH block is indented exactly like a GEM one. Sections are merged;
+  # entries for the same gem name merge their dep lists.
+  specSectionIndices = helpers.findIndices (l: l == "GEM" || l == "GIT" || l == "PATH") lines;
+  specSectionRawLines = lib.lists.map (i: helpers.takeLines i lines) specSectionIndices;
+  depGraphs = lib.lists.map parseDependencies specSectionRawLines;
   depGraph = builtins.foldl' (
     acc: g: lib.attrsets.zipAttrsWith (name: vals: lib.unique (lib.flatten vals)) ([ acc ] ++ [ g ])
   ) { } depGraphs;
@@ -146,8 +164,8 @@ let
 in
 {
   gems = mergeGemMetadata {
-    inherit (parsed) checksumSection;
-    inherit gemRemotes;
+    inherit (parsed) checksumSection gitSections;
+    inherit gemRemotes pathSections pathRoot;
     gemGroups = resolvedGemGroups;
   };
   inherit depGraph;

@@ -23,12 +23,14 @@
    in `parse.nix` acknowledges this, but the current behavior is
    silently arbitrary rather than loudly wrong.
 
-4. **Open. No support for git or path sources.**
-   Gems sourced from git repos or local paths are gracefully skipped by the
-   parser (their hashless checksum lines return null) but are not included
-   in the built environment. The `examples/complex/` integration test
-   documents this: `errgonomic` (git) and `hello_gem` (path) print SKIP
-   rather than OK. See also #13.
+4. **Done. GIT and PATH sections are parsed and built.**
+   `parseGitSection` and `parsePathSection` read the two source section types by indent depth, and `mergeGemMetadata` folds their gems into the same list the `CHECKSUMS` gems arrive in. `examples/complex` builds `errgonomic` (git) and `hello_gem` (path) and its validator loads both. See #13 for the build half.
+
+   The parser refuses rather than skipping: a hashless `CHECKSUMS` line no source claims, a `PLUGIN SOURCE` section, a `glob:` option and an unrecognised key on a source section are all evaluation errors. Gated in `test/unit/test-parse-logic.nix` by `test_parseLockfile_unexplained_hashless_throws`, `test_parseLockfile_plugin_source_throws`, `test_parseGitSection_glob_throws`, `test_parsePathSection_glob_throws`, `test_parseGitSection_unknown_key_throws` and `test_parsePathSection_git_key_throws`.
+
+`glob` is listed among each section type's recognised keys precisely so that the two glob tests gate the branch that refuses it. Left off the list, the unrecognised-key branch would reject a glob independently, both tests would pass with the dedicated branch deleted, and this paragraph would be claiming coverage that did not exist. Deleting either branch now fails a test that names it.
+
+At the `gemfileEnv` level the guards are gated by `test/integration/lockfile-guards/guards.nix`.
 
 ### Filtering and Building (`default.nix`)
 
@@ -44,9 +46,9 @@
 6. **Done. `nix flake check` runs the suite in CI.**
    `.github/workflows/ci.yml` runs `nix flake check` on every pull request and on pushes to `main`. The root `checks` output carries the unit suites, the credential, argument and Ruby-override wiring checks, and two `runCommand` integration checks that build real gem environments.
 
-   Still by hand: the `examples/` flakes, each of which has its own `nix flake check`. CI is `x86_64-linux` only.
+   Two more jobs run beside it. `unit` evaluates the standalone `test/unit/test-*.nix` wrappers, which reach the same logic through an unpinned `fetchTarball` rather than through the flake's `pkgs.lib`. `examples` runs `nix flake check` in each of `examples/{simple,medium,complex}`, which cannot join the root flake: they are standalone flakes with a `path:../..` input, and pulling them in would be a self-reference cycle. CI is `x86_64-linux` only.
 
-   No test gates this one, and none can: what CI runs is evidence produced by a run, not an assertion the suite can make about itself. The ten checks it executes are `unit-parse`, `unit-resolve`, `unit-pipeline`, `unit-credentials`, `unit-arguments`, `credentials-wiring`, `arguments-strictness`, `ruby-override-wiring`, `integration-platform-gems` and `integration-gemspec-directive`.
+   No test gates this one, and none can: what CI runs is evidence produced by a run, not an assertion the suite can make about itself. The thirteen checks `nix flake check` executes are `unit-parse`, `unit-resolve`, `unit-pipeline`, `unit-credentials`, `unit-arguments`, `unit-pending`, `credentials-wiring`, `arguments-strictness`, `lockfile-guards`, `git-path-wiring`, `ruby-override-wiring`, `integration-platform-gems` and `integration-gemspec-directive`.
 
 7. **Open. `gem-groups.rb` group propagation may over-propagate.**
    The Ruby script iterates all specs and propagates groups through
@@ -84,7 +86,7 @@ the less we maintain and the more we benefit from upstream fixes.
 
    - **Done.** The caller's `ruby` reaches `buildRubyGem`, so the gems and the `GEM_PATH` setup hook are built against the same Ruby. Gated by `test/integration/ruby-override/wiring.nix`.
    - **Done.** `type` and `gemName` come from the parsed metadata.
-   - **Open.** `gemPath` is not set. A gem with a native extension that reads another gem's headers at build time (nokogiri wanting `mini_portile2`) does not see its siblings, so it can fail where `bundlerEnv` succeeds. The transitive expansion in #5 puts the sibling in the environment; it does not put it on the building gem's `gemPath`.
+   - **Open.** `gemPath` is not set. A gem with a native extension that reads another gem's headers at build time (nokogiri wanting `mini_portile2`) does not see its siblings, so it can fail where `bundlerEnv` succeeds. The transitive expansion in #5 puts the sibling in the environment; it does not put it on the building gem's `gemPath`. The edges a fix needs are already parsed: `depGraph` in `default.nix` covers GEM, GIT and PATH sections alike. What is missing is mapping a gem's dependency names to the derivations already built for them. Recorded in `test/unit/test-pending-logic.nix` under `nonTests.native_extensions_cannot_see_their_siblings`.
 
    **Action for the open half:** use `composeGemAttrs`, or replicate its `gemPath` logic, to wire up inter-gem build dependencies.
 
@@ -92,7 +94,7 @@ the less we maintain and the more we benefit from upstream fixes.
 
    The pipeline now resolves platform duplicates before applying gem configs, and applies them only when `platform == "ruby"`, so a precompiled variant never receives source-build overrides. Gated by `test_pipeline_precompiled_skips_gemConfig` and `test_pipeline_ruby_only_gets_gemConfig` in `test/unit/test-resolve-logic.nix`. Those tests assert against a local restatement of the pipeline rather than against `default.nix` itself, which is a real gap.
 
-10. **Open. Produce Bundler-aware binstubs like `bundlerEnv` does.**
+10. **Open, and the single biggest consumer blocker. Produce Bundler-aware binstubs like `bundlerEnv` does.**
     Our `buildEnv` creates a flat symlink forest of gems, but doesn't
     generate Bundler-compatible binstubs. Upstream `bundlerEnv` runs
     `gen-bin-stubs.rb` which generates wrappers that call `Bundler.setup()`
@@ -130,30 +132,16 @@ the less we maintain and the more we benefit from upstream fixes.
 
     Dropping the Ruby `runCommand` entirely is a separate change, tracked in #14.
 
-13. **Open. `buildRubyGem` can handle git and path sources natively.**
-    `buildRubyGem` already supports `type = "git"` (via
-    `nix-bundle-install.rb`, which monkey-patches Bundler to install from a
-    git checkout) and path sources (via `pathDerivation` in
-    `bundled-common/functions.nix`). We don't need to implement these from
-    scratch; we just need to parse the `GIT` and `PATH` sections of the
-    lockfile and pass the right attributes.
+13. **Done, but not the way this item proposed.** `buildRubyGem`'s own `type = "git"` and `pathDerivation` were both rejected.
 
-    The lockfile format for git sources is:
-    ```
-    GIT
-      remote: https://github.com/user/repo.git
-      revision: abc123
-      specs:
-        gemname (1.0.0)
-    ```
+    `type = "git"` installs the gem into `bundler/gems/` and writes no `specifications/*.gemspec`. That file is what RubyGems reads to find a gem on the `GEM_PATH`, so `require` fails without it. A setup-hook could point at the gem instead, but `buildEnv` deletes the `nix-support` directory a hook lives in. And `type = "git"` wants a `sha256`, which a `Gemfile.lock` does not record for a git source. `pathDerivation` is out for the same gemspec-less reason.
 
-    **Action:** Parse `GIT` and `PATH` sections alongside `GEM` sections.
-    For git sources, set `source.type = "git"`, `source.url`, `source.rev`.
-    For path sources, set `source.type = "path"`, `source.path`.
-    `buildRubyGem` handles the rest.
+    So a git or path gem builds as `type = "gem"` with a `src` gems4nix supplies: `builtins.fetchGit` at the locked revision, or the resolved path. `gitMinimal` goes on the build path and `preBuild` runs `git init && git add -A`, because many gemspecs compute `spec.files` from `git ls-files` and would otherwise install a gem containing nothing. `postInstall` refuses a gem with no gemspec or an empty gem directory rather than leaving that to fail at `require`.
+
+    Three limitations stand, all recorded in `test/unit/test-pending-logic.nix` under `nonTests`: Bundler cannot see a git gem (#10), a git gem with a native extension has no `gemPath` (#9), and `builtins.fetchGit` runs at evaluation time and is not cacheable, for which `gemSrcOverrides` is the escape hatch.
 
 14. **Partly done. The parsers exist; nothing calls them.**
-    The `specs:` half is wired: `parseDependencies` feeds the expansion in #12.
+    The `specs:` half is wired: `parseDependencies` feeds the expansion in #12, and it reads every `specs:` block, GIT and PATH sections included, so a git gem's own dependencies survive the group filter too.
 
     The `DEPENDENCIES` half is written and unit-tested but unreachable from the pipeline. `parseDependenciesSection` and `takeDependenciesSection` in `parse.nix` are exported and covered by `test/unit/test-parse-logic.nix`, and `parse-gemfile-and-lockfile.nix` calls neither. Retiring the IFD means calling them and propagating groups along the `specs:` edges in Nix.
 

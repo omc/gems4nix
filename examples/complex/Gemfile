@@ -11,10 +11,10 @@ gem 'rails', '~> 8.0'
 # Native gem with platform variants
 gem 'ffi', '~> 1.17'
 
-# Git source: tests GIT section parsing (TODO #13)
+# Git source: exercises GIT section parsing
 gem 'errgonomic', git: 'https://github.com/omc/errgonomic.git', branch: 'main'
 
-# Path source: tests PATH section parsing (TODO #13)
+# Path source: exercises PATH section parsing
 gem 'hello_gem', path: 'vendor/hello_gem'
 
 group :development, :test do

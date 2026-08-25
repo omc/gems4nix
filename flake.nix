@@ -77,6 +77,13 @@
           unit-credentials = nixEvalCheck "credentials" ./test/unit/test-credentials-logic.nix;
           unit-arguments = nixEvalCheck "arguments" ./test/unit/test-arguments-logic.nix;
 
+          # The pending ledger asserts that each known limitation is still a
+          # limitation. It takes `.ledger` rather than the whole file, because
+          # the pending tests themselves are expected to throw.
+          unit-pending = pkgs.writeText "unit-pending" (
+            builtins.deepSeq (import ./test/unit/test-pending-logic.nix { lib = pkgs.lib; }).ledger "PASS"
+          );
+
           # Asserts credential plumbing on derivation attributes only; no fetch.
           credentials-wiring = pkgs.writeText "credentials-wiring" (
             builtins.deepSeq (import ./test/integration/credentials/wiring.nix {
@@ -87,6 +94,23 @@
           # Asserts that gemfileEnv rejects an argument it does not declare.
           arguments-strictness = pkgs.writeText "arguments-strictness" (
             builtins.deepSeq (import ./test/integration/arguments/strictness.nix {
+              inherit pkgs gemfileEnv;
+            }) "PASS"
+          );
+
+          # Asserts a lockfile gems4nix cannot honour throws rather than
+          # dropping the gem it cannot build.
+          lockfile-guards = pkgs.writeText "lockfile-guards" (
+            builtins.deepSeq (import ./test/integration/lockfile-guards/guards.nix {
+              inherit pkgs gemfileEnv;
+            }) "PASS"
+          );
+
+          # Asserts the git/path build wrapper's contract with a caller's
+          # gemConfig: gemSrcOverrides reaches the build, and the empty-gem
+          # check runs where a gemConfig postInstall cannot skip it.
+          git-path-wiring = pkgs.writeText "git-path-wiring" (
+            builtins.deepSeq (import ./test/integration/git-path-wiring/wiring.nix {
               inherit pkgs gemfileEnv;
             }) "PASS"
           );
