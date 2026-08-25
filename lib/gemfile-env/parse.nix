@@ -665,10 +665,11 @@ let
   # serve it and the lockfile's order is Bundler's priority order.
   #
   # Two sections claiming one gem is not a lockfile Bundler writes: it locks a
-  # resolved spec under the single source that resolved it. There is also no
-  # rule that would say which one wins, and Bundler does not invent one — it
-  # tells the user to name the source in the Gemfile. Do the same rather than
-  # taking whichever section came first, which reads as a decision and is not.
+  # resolved spec under the single source that resolved it, so a written
+  # lockfile is unambiguous by construction. Meeting the same ambiguity during
+  # resolution, Bundler asks the user to name the source in the Gemfile, and
+  # refuses outright under bundler_4_mode. Refuse here rather than taking
+  # whichever section came first, which reads as a decision and is not.
   indexRemotes =
     gemSections:
     let

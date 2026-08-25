@@ -202,7 +202,7 @@ Reading the file top to bottom instead would try Bundler's *lowest*-priority sou
 
 Only the four-space lines under `specs:` are gems of a section. The six-space lines below each one name that gem's dependencies, which another section may well provide.
 
-A gem that two `GEM` sections both claim is an evaluation error. Bundler locks a resolved gem under the single source that resolved it, so this is not a lockfile it writes, and it has no rule that would pick a winner — faced with the same ambiguity during resolution it tells you to name the source in the `Gemfile`. gems4nix says the same rather than taking whichever section came first, which would read as a decision and is not.
+A gem that two `GEM` sections both claim is an evaluation error. Bundler locks a resolved gem under the single source that resolved it, so this is not a lockfile it writes. Faced with the same ambiguity while resolving, Bundler asks you to name the source in the `Gemfile`, and refuses outright under `bundler_4_mode`; older Bundler warns and takes the first source it saw. gems4nix refuses rather than copying that fallback, because here the "first source" is only the order the sections happen to appear in, and choosing by it would read as a decision when it is not.
 
 ### The Ruby the lockfile was resolved with
 
