@@ -29,7 +29,7 @@ let
   parserHelpers = import ../../lib/gemfile-env/parser-helpers.nix { inherit lib; };
   filterHelpers = import ../../lib/gemfile-env/filter-helpers.nix { inherit lib; };
 
-  inherit (parserHelpers) parseGitSection;
+  inherit (parserHelpers) parseGitSection parseLockfileContent;
   inherit (filterHelpers)
     filterGroup
     filterPlatform
@@ -201,6 +201,48 @@ in
         assertEq "pending: a gemConfig entry may still set preBuild on a git gem"
           (applyGemConfigs (configSetting "preBuild" "echo hi") errgonomic).preBuild
           "echo hi";
+
+    # LIMITATION (TODO #16)
+    # A Gemfile.lock ends with a RUBY VERSION section naming the Ruby it was
+    # resolved against. We never read it, and gemfileEnv never checks it
+    # against the ruby it builds with. The two drift in silence: a lockfile
+    # saying 3.4.9 built against nixpkgs 24.11 gives a whole environment
+    # compiled for 3.3.5, and the first sign of trouble is a runtime error in
+    # a gem that expected the newer stdlib.
+    #
+    # THEORIZED FIX
+    # Read the section here and return it from parseLockfileContent, then
+    # compare it to `ruby.version` in default.nix. This test asks for the
+    # parser half only; the comparison has no pure test.
+    #
+    # Note the three-space indent on the value. Bundler writes RUBY VERSION
+    # and BUNDLED WITH that way, unlike the two-space option lines elsewhere.
+    # A helper that assumes two spaces reads the version as " ruby 3.4.9".
+    #
+    # Return null when the section is absent. It is optional, and a lockfile
+    # without it is not an error.
+    test_parseLockfileContent_reads_the_ruby_version =
+      let
+        lockfile = ''
+          GEM
+            remote: https://rubygems.org/
+            specs:
+              rake (13.0.6)
+
+          CHECKSUMS
+            rake (13.0.6) sha256=aaaa
+
+          RUBY VERSION
+             ruby 3.4.9
+
+          BUNDLED WITH
+             2.7.2
+        '';
+        result = parseLockfileContent lockfile;
+      in
+      assertEq "pending: parseLockfileContent must report the locked ruby version" (result.rubyVersion
+        or null
+      ) "3.4.9";
   };
 
   # Limitations with no test. Each says why, and what a test would need.

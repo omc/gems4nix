@@ -392,3 +392,26 @@ the less we maintain and the more we benefit from upstream fixes.
     **Action:** Document the requirement where a user meets it, and consider a
     check that names the missing credential rather than letting git's message
     surface alone. The Readme covers the developer case today.
+
+16. **The lockfile's `RUBY VERSION` is neither read nor enforced.**
+    A Gemfile.lock ends with a `RUBY VERSION` section naming the Ruby the
+    lockfile was resolved against. We ignore it. The parser has no helper for
+    the section, and `gemfileEnv` never compares it to the `ruby` it builds
+    with.
+
+    The failure is silent and the versions can drift far apart. A lockfile
+    saying `ruby 3.4.9` built against nixpkgs 24.11, whose default is 3.3.5,
+    produces a full environment with no warning. Gems resolved for one minor
+    version get installed for another, and the first sign of trouble is a
+    runtime error in a gem that assumed the newer stdlib.
+
+    **Action:** Parse the section in `parser-helpers.nix` and return it from
+    `parseLockfileContent`. Then compare it against `ruby.version` in
+    `gemfile-env/default.nix`. Warn rather than throw, at least at first:
+    a patch-level disagreement is usually harmless, and a user who knows
+    better needs a way past it. A `throw` wants an escape hatch argument
+    beside it.
+
+    **Pending test:** `test/unit/test-pending.nix` →
+    `test_parseLockfileContent_reads_the_ruby_version`, which asks for the
+    parser half. The comparison in `default.nix` has no pure test.
