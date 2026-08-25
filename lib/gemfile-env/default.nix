@@ -318,13 +318,40 @@ let
         # the case where a git gem goes missing and nothing says why. The
         # environment is read-only, so `gem install` into it fails; declare the
         # gem in the Gemfile instead.
-        postBuild = ''
-          mkdir -p $out/nix-support
-          cat > $out/nix-support/setup-hook <<EOF
-          export GEM_HOME="$out/${ruby.gemPath}"
-          export GEM_PATH="$out/${ruby.gemPath}\''${GEM_PATH:+:\$GEM_PATH}"
-          EOF
-        '';
+        #
+        # GEM_PATH accumulates and GEM_HOME cannot, so two of these
+        # environments in one shell would leave the loser's git gems out of
+        # Bundler's reach while plain `require` still found them. That is the
+        # failure this whole layout exists to remove, one level up, so the
+        # second one refuses instead. GEMS4NIX_GEM_HOME is what distinguishes
+        # another gems4nix environment from a GEM_HOME the user brought, which
+        # is overridden without comment.
+        postBuild =
+          let
+            gemHome = "$out/${ruby.gemPath}";
+          in
+          ''
+            mkdir -p $out/nix-support
+            cat > $out/nix-support/setup-hook <<EOF
+            gems4nixGemHome="${gemHome}"
+            EOF
+            cat >> $out/nix-support/setup-hook <<'HOOK'
+            if [ -n "''${GEMS4NIX_GEM_HOME-}" ] && [ "''${GEMS4NIX_GEM_HOME-}" != "''$gems4nixGemHome" ]; then
+              echo 'gems4nix: two gems4nix environments are on this shell, and GEM_HOME can only name one.' >&2
+              echo "  already here: ''${GEMS4NIX_GEM_HOME}" >&2
+              echo "  and now:      ''$gems4nixGemHome" >&2
+              echo 'Bundler reads a git gem only from bundler/gems under GEM_HOME, so the git gems of' >&2
+              echo 'whichever environment loses go missing from require "bundler/setup" while a plain' >&2
+              echo 'require still finds them. Build one gemfileEnv from both Gemfiles, or keep the two' >&2
+              echo 'environments in separate shells.' >&2
+              exit 1
+            fi
+            export GEMS4NIX_GEM_HOME="''$gems4nixGemHome"
+            export GEM_HOME="''$gems4nixGemHome"
+            export GEM_PATH="''$gems4nixGemHome''${GEM_PATH:+:''$GEM_PATH}"
+            unset gems4nixGemHome
+            HOOK
+          '';
       }
     );
 in

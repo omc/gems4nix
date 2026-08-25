@@ -153,6 +153,49 @@
             }) "PASS"
           );
 
+          # Asserts the setup hook refuses to be the second gems4nix
+          # environment in one shell, rather than quietly winning GEM_HOME and
+          # taking another environment's git gems out of Bundler's reach.
+          bundler-gem-home-guard =
+            pkgs.runCommand "bundler-gem-home-guard" { }
+              ''
+                hook="${bundlerLayoutGems}/nix-support/setup-hook"
+
+                actual=$(unset GEM_HOME GEMS4NIX_GEM_HOME; . "$hook"; echo "$GEM_HOME")
+                if [ "$actual" != "${bundlerLayoutGemPath}" ]; then
+                  echo "hook set GEM_HOME to $actual, expected ${bundlerLayoutGemPath}" >&2
+                  exit 1
+                fi
+
+                # A GEM_HOME the user brought is overridden without comment.
+                # Only another gems4nix environment is ambiguous, and only
+                # GEMS4NIX_GEM_HOME can tell the two apart.
+                actual=$(unset GEMS4NIX_GEM_HOME; export GEM_HOME=/home/someone/.local/share/gem; . "$hook"; echo "$GEM_HOME")
+                if [ "$actual" != "${bundlerLayoutGemPath}" ]; then
+                  echo "hook deferred to a user's own GEM_HOME: $actual" >&2
+                  exit 1
+                fi
+
+                decoy=/nix/store/00000000000000000000000000000000-other-env/lib/ruby/gems/3.3.0
+                if (
+                  export GEM_HOME="$decoy" GEMS4NIX_GEM_HOME="$decoy"
+                  . "$hook"
+                ) 2>stderr.txt; then
+                  echo "a second gems4nix environment was accepted in silence" >&2
+                  exit 1
+                fi
+
+                for needle in "$decoy" "${bundlerLayoutGemPath}" "bundler/setup"; do
+                  if ! grep -qF "$needle" stderr.txt; then
+                    echo "the refusal does not mention $needle:" >&2
+                    cat stderr.txt >&2
+                    exit 1
+                  fi
+                done
+
+                touch $out
+              '';
+
           # Measures what one git repository supplying two gems produces. Both
           # gems write the same bundler/gems scope, which is what a real
           # checkout of such a repository looks like.
