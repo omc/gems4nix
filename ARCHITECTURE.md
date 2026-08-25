@@ -27,7 +27,11 @@ flowchart TD
    the store. `buildRubyGem` builds its `src` from `source.remotes` and
    `source.sha256` alone, so a gem on a credentialed remote gets a `src` we
    construct instead.
-6. Stay unopinionated about where that secret comes from. A consumer names
+6. `gemfileEnv` rejects an argument it does not declare. A consumer pinned to a
+   version predating a feature has to learn that at the call site; the
+   alternative is a successful evaluation that ignores the argument and fails
+   somewhere else entirely.
+7. Stay unopinionated about where that secret comes from. A consumer names
    either a file path (`netrcFile`, needing no daemon configuration) or two
    environment variables (needing no readable file). Both fail on different
    machines, so the choice belongs to the consumer, and each mode reports its
@@ -51,6 +55,7 @@ lib/gemfile-env/
   parse.nix                       Lockfile parsing. Pure Nix, takes { lib }.
   resolve.nix                     Filtering and resolution. Pure Nix, takes { lib }.
   credentials.nix                 Private-registry credentials. Pure Nix, takes { lib }.
+  arguments.nix                   Argument-surface strictness. Pure Nix, takes { lib }.
   parse-gemfile-and-lockfile.nix  IO shell: readFile, runCommand, calls parse.nix.
   gem-configs.nix                 Local per-gem build overrides.
   gem-groups.rb                   Ruby IFD script for Gemfile group extraction.
@@ -61,7 +66,8 @@ test/
   unit/test-resolve-logic.nix     Unit tests for resolve.nix.
   unit/test-pipeline-logic.nix    End-to-end parse + resolve tests.
   unit/test-credentials-logic.nix Unit tests for credentials.nix.
-  unit/test-{parse,resolve,pipeline,credentials}.nix  Wrappers that import logic + lib.
+  unit/test-arguments-logic.nix   Unit tests for arguments.nix and gemfileEnv's argument surface.
+  unit/test-{parse,resolve,pipeline,credentials,arguments}.nix  Wrappers that import logic + lib.
   fixtures/lockfiles/             Lockfile corpus for testing.
   integration/                    Integration tests with real gem builds.
 
