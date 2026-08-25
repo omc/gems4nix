@@ -58,10 +58,18 @@ let
     # whatever that produced, while the empty-gem check runs before a caller's
     # `postInstall`, so an `exit` there cannot skip it.
     #
-    # The `preBuild` side is still reachable by this same defect: a gemConfig
-    # entry whose `preBuild` exits ends the build before the gem is ever built.
-    # The empty-gem check catches the result, because there is then nothing
-    # installed for it to find.
+    # A gemConfig entry whose `preBuild` exits ends the build before the gem
+    # is ever built, and the empty-gem check does not catch that: no
+    # installPhase runs, so no postInstall runs either. Nix rejects it instead,
+    # because the builder returned without creating $out. The message names the
+    # missing output path and nothing else, so it says which gem failed but not
+    # why.
+    #
+    # Running the empty-gem check first also forecloses one thing the old
+    # ordering allowed: backfilling files into an otherwise-empty gem from a
+    # caller's `postInstall`. Nothing in lib/gemfile-env does that, and an
+    # unskippable check is worth more than the pattern, but it is a tradeoff
+    # rather than a free win.
     #
     # THEORIZED FIX
     # Refuse the combination. A gemConfig entry may not set `src`,
