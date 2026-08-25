@@ -169,6 +169,24 @@ the less we maintain and the more we benefit from upstream fixes.
     to activate exactly the right gem versions. A plain `buildEnv` will have
     all gems on the `GEM_PATH` but Bundler won't know about them.
 
+    **This is a hard blocker for git gems, not a refinement.** How much it
+    costs you depends on the source:
+
+    - A gem from a `GEM` section survives. `Bundler::Source::Rubygems`
+      resolves through `Gem::Specification`, so a gem installed on the
+      `GEM_PATH` satisfies it. Apps that boot through `bundler/setup` work
+      today because of this.
+    - A gem from a `PATH` section survives too. `Bundler::Source::Path`
+      reads the gemspec straight out of the source directory. Verified: a
+      path gem loads under `bundler/setup` with no `bundle install` first.
+    - A gem from a `GIT` section does not. `Bundler::Source::Git#load_spec_files`
+      looks only in `GEM_HOME/bundler/gems/<name>-<shortrev>` and never
+      consults the `GEM_PATH`. We install git gems as ordinary gems, so
+      Bundler cannot see them and raises `Bundler::GitError`.
+
+    So every stock Rails app is shut out of git gems until this item lands.
+    Item 13 records the repro and the workaround.
+
     **Action:** Either call `gen-bin-stubs.rb` in a `postBuild` hook (like
     `bundlerEnv` does), or provide a `confFiles` derivation with the
     Gemfile/Gemfile.lock pair and delegate to upstream's stubs machinery.
@@ -251,6 +269,35 @@ the less we maintain and the more we benefit from upstream fixes.
     **Switching to `type = "git"` requires #10 (Bundler-aware binstubs /
     `Bundler.setup`) as a hard prerequisite.** Do that first or not at all.
 
+    **What we build works for `require`, not for `bundler/setup`.** An early
+    draft of this item claimed #10 was not a blocker because we chose
+    `type = "gem"`. That claim was wrong and is corrected here. `type = "gem"`
+    buys us plain `require` through the `GEM_PATH`, and nothing more. Bundler
+    finds a git gem by one path only, `GEM_HOME/bundler/gems/<name>-<shortrev>`,
+    which we never write. So an app whose `config/boot.rb` says
+    `require "bundler/setup"` — every stock Rails app — still cannot use a git
+    gem from us. #10 is not a blocker for *building* a git gem. It is a
+    blocker for *consuming* one from a Bundler-booted app.
+
+    Reproduced against `examples/complex`, whose `errgonomic` comes from a
+    `GIT` section:
+
+    ```
+    # GEM_PATH set, plain require:
+    OK plain require errgonomic
+
+    # same environment, via Bundler:
+    bundler/source/git.rb:236:in `rescue in load_spec_files':
+      https://github.com/omc/errgonomic.git (at main@f06314a) is not yet
+      checked out. Run `bundle install` first. (Bundler::GitError)
+    ```
+
+    **Workaround until #10 lands: use a `PATH` source instead of a `GIT` one.**
+    Bundler reads a path gem's gemspec from its directory, so vendoring the
+    gem works under `bundler/setup` with no `bundle install`. Verified. The
+    other way out is to publish the gem to a registry and depend on it from a
+    `GEM` section.
+
     Why not `pathDerivation`: it returns a fake derivation whose `outPath` is
     the raw source directory. `bundlerEnv` makes that work with
     `pathsToLink = ["/lib"]`, `confFiles` and binstubs. We have none of those,
@@ -268,6 +315,9 @@ the less we maintain and the more we benefit from upstream fixes.
     non-empty gem directory, so the build fails instead.
 
     **Still missing:**
+    - A git gem is invisible to `bundler/setup`, as above. #10 is the fix.
+      Recorded in `test/unit/test-pending.nix` under `nonTests` as
+      `git_gems_are_invisible_to_bundler_setup`.
     - Git gems with native extensions will fail — they need `gemPath` for
       inter-gem build deps (#9). Not exercised by the examples.
     - `builtins.fetchGit` fetches at *evaluation* time and its output is not a

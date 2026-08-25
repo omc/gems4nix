@@ -209,6 +209,46 @@ in
   #   nix eval --file test/unit/test-pending.nix nonTests --json
   nonTests = {
 
+    git_gems_are_invisible_to_bundler_setup = ''
+      LIMITATION (TODO #10, detail in TODO #13)
+      We install a git gem as an ordinary gem, so plain `require` finds it
+      through the GEM_PATH. Bundler does not. Bundler::Source::Git#load_spec_files
+      looks in GEM_HOME/bundler/gems/<name>-<shortrev> and nowhere else, and we
+      never write that directory. So an app booting with `require "bundler/setup"`
+      cannot use a git gem from us. That is every stock Rails app.
+
+      Gems from GEM and PATH sections are unaffected. Bundler resolves a
+      rubygems gem through Gem::Specification, which reads the GEM_PATH, and it
+      reads a path gem's gemspec out of its source directory. Only GIT sources
+      break. Vendoring the gem as a PATH source is the workaround until #10.
+
+      REPRO
+      Against examples/complex, whose errgonomic comes from a GIT section.
+      Build the environment, then with GEM_PATH pointing into it:
+
+        ruby -e 'require "errgonomic"'
+        => loads
+
+        BUNDLE_GEMFILE=examples/complex/Gemfile ruby -e 'require "bundler/setup"'
+        => bundler/source/git.rb:236:in `rescue in load_spec_files':
+           https://github.com/omc/errgonomic.git (at main@f06314a) is not yet
+           checked out. Run `bundle install` first. (Bundler::GitError)
+
+      The same command with only the PATH gem in the Gemfile succeeds, with no
+      `bundle install` first. That asymmetry is the whole finding.
+
+      WHY NO TEST
+      Nothing here is a branch in our code, and no assertion in a Nix
+      expression can reach it. Showing it needs a built environment, a ruby,
+      and Bundler reading a Gemfile. Pure evaluation has none of those.
+
+      WHAT A TEST WOULD LOOK LIKE
+      A second check in examples/complex beside `validate`, running
+      `require "bundler/setup"` against the built environment with BUNDLE_GEMFILE
+      set. It fails today. Write it when #10 lands, as the thing that proves #10
+      worked, and promote it out of this file then.
+    '';
+
     non_github_git_servers = ''
       LIMITATION
       We fetch a git gem by its locked revision alone. Some git servers refuse

@@ -137,6 +137,9 @@ tree. A missing one is an evaluation error naming `root`, not a silent skip.
 
 Known limitations, stated rather than implied:
 
+- **A git gem is invisible to `bundler/setup`.** Plain `require` finds it, so a
+  Rails app that boots through Bundler cannot use one. The next section has the
+  detail and the workaround.
 - **Native extensions in a git gem will fail.** They need `gemPath` wired up for
   inter-gem build dependencies (TODO #9). Pure-Ruby git gems are what's tested.
 - **Only GitHub is exercised.** Fetching a bare SHA is verified against GitHub;
@@ -148,6 +151,31 @@ Known limitations, stated rather than implied:
 - Any `CHECKSUMS` line without a hash that no GIT or PATH section explains is
   now an evaluation error. Previously such gems were dropped silently and only
   surfaced as a `LoadError` at runtime.
+
+### Git gems don't work under `bundler/setup` yet
+
+Read this before you put a git gem in a Rails app.
+
+We install a git gem as an ordinary gem, so plain `require` finds it through
+the `GEM_PATH`. Bundler doesn't. `Bundler::Source::Git` looks for a git gem in
+`GEM_HOME/bundler/gems/<name>-<shortrev>` and nowhere else, so an app that
+boots with `require "bundler/setup"` — which is every stock Rails app — fails
+on the git gem:
+
+```
+bundler/source/git.rb:236:in `rescue in load_spec_files':
+  https://github.com/omc/errgonomic.git (at main@f06314a) is not yet
+  checked out. Run `bundle install` first. (Bundler::GitError)
+```
+
+Gems from `GEM` and `PATH` sections are fine. Bundler resolves a rubygems gem
+through `Gem::Specification`, which reads the `GEM_PATH`, and it reads a path
+gem's gemspec straight out of its directory. Only `GIT` sources are affected.
+
+**Until this is fixed, vendor the gem and depend on it as a `PATH` source, or
+publish it to a registry.** A vendored path gem loads under `bundler/setup`
+with no `bundle install`. `TODO.md` item 10 is the real fix and item 13 has the
+detail.
 
 ## Testing
 
