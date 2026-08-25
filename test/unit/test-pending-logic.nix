@@ -112,51 +112,6 @@ let
           (applyGemConfigs (configSetting "preBuild" "echo hi") errgonomic).preBuild
           "echo hi";
 
-    # LIMITATION
-    # A Gemfile.lock ends with a RUBY VERSION section naming the Ruby it was
-    # resolved against. gems4nix never reads it, and gemfileEnv never checks it
-    # against the ruby it builds with. The two drift in silence: a lockfile
-    # saying 3.4.9 built against a nixpkgs whose default is 3.3.5 gives a whole
-    # environment compiled for the wrong Ruby. What breaks after that has not
-    # been measured.
-    #
-    # THEORIZED FIX
-    # Read the section here and return it from parseLockfile, then compare it
-    # to `ruby.version` in default.nix. This test asks for the parser half
-    # only; the comparison has no pure test.
-    #
-    # Note the three-space indent on the value. Bundler writes RUBY VERSION and
-    # BUNDLED WITH that way, unlike the two-space option lines elsewhere. A
-    # helper that assumes two spaces reads the version as " ruby 3.4.9".
-    #
-    # Return null when the section is absent. It is optional, and a lockfile
-    # without it is not an error.
-    #
-    # The value sometimes carries a patchlevel: examples/complex records
-    # `ruby 3.3.10p183`. This test pins the bare form only. Whoever writes the
-    # parser decides whether the patchlevel stays in the returned string, and
-    # should add the case here once decided.
-    test_parseLockfile_reads_the_ruby_version =
-      let
-        lockfile = ''
-          GEM
-            remote: https://rubygems.org/
-            specs:
-              rake (13.0.6)
-
-          CHECKSUMS
-            rake (13.0.6) sha256=aaaa
-
-          RUBY VERSION
-             ruby 3.4.9
-
-          BUNDLED WITH
-             2.7.2
-        '';
-        result = parseLockfile lockfile;
-      in
-      assertEq "pending: parseLockfile must report the locked ruby version" (result.rubyVersion or null
-      ) "3.4.9";
   };
 
   # Limitations with no test. Each says why, and what a test would need.

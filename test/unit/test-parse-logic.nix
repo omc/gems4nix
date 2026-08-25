@@ -24,6 +24,7 @@ let
     parseDependencies
     parseDependenciesSection
     takeDependenciesSection
+    parseRubyVersion
     parseLockfile
     indexRemotes
     mergeGemMetadata
@@ -422,6 +423,58 @@ let
     &&
       assertEq "parseLockfile: surviving gem is rake" (builtins.elemAt result.checksumSection 0).gemName
         "rake";
+
+  # ── RUBY VERSION ─────────────────────────────────────────────
+
+  rubyVersionLockfile = version: ''
+    GEM
+      remote: https://rubygems.org/
+      specs:
+        rake (13.0.6)
+
+    CHECKSUMS
+      rake (13.0.6) sha256=aaaa
+
+    RUBY VERSION
+    ${version}
+
+    BUNDLED WITH
+       2.7.2
+  '';
+
+  test_parseLockfile_reads_the_ruby_version =
+    assertEq "parseLockfile: the locked ruby version, past its three-space indent"
+      (parseLockfile (rubyVersionLockfile "   ruby 3.4.9")).rubyVersion
+      "3.4.9";
+
+  # examples/complex records this shape.
+  test_parseRubyVersion_drops_the_patchlevel =
+    assertEq "parseRubyVersion: a patchlevel is not part of the version"
+      (parseRubyVersion [
+        "RUBY VERSION"
+        "   ruby 3.3.10p183"
+        ""
+      ])
+      "3.3.10";
+
+  test_parseRubyVersion_absent_is_null =
+    assertEq "parseRubyVersion: a lockfile with no RUBY VERSION section is not an error"
+      (parseRubyVersion [
+        "GEM"
+        "  remote: https://rubygems.org/"
+        ""
+      ])
+      null;
+
+  # JRuby writes `ruby 3.1.4 (jruby 9.4.5.0)`. Reading the 3.1.4 out of it
+  # would claim a match gems4nix cannot deliver.
+  test_parseRubyVersion_unreadable_throws =
+    assertThrows "parseRubyVersion: a value in an unrecognised shape throws"
+      (parseRubyVersion [
+        "RUBY VERSION"
+        "   ruby 3.1.4 (jruby 9.4.5.0)"
+        ""
+      ]);
 
   # ── indexRemotes ──────────────────────────────────────────
 
@@ -1363,6 +1416,11 @@ let
     && test_parseLockfile_unexplained_hashless_throws
     && test_parseLockfile_plugin_source_throws
     # indexRemotes
+    # RUBY VERSION
+    && test_parseLockfile_reads_the_ruby_version
+    && test_parseRubyVersion_drops_the_patchlevel
+    && test_parseRubyVersion_absent_is_null
+    && test_parseRubyVersion_unreadable_throws
     && test_indexRemotes
     && test_indexRemotes_carries_every_remote
     && test_indexRemotes_duplicate_gem_throws

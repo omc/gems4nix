@@ -512,6 +512,37 @@ let
     in
     if idx != null then takeLines idx lines else [ ];
 
+  # ── RUBY VERSION ─────────────────────────────────────────────
+
+  # The Ruby a lockfile was resolved with, or null when it names none.
+  #
+  # Bundler writes the section only for a Gemfile that declares a `ruby`
+  # requirement, so most lockfiles have none, and that is not an error.
+  #
+  # Two shapes of the value trip up a reader. It is indented by three spaces,
+  # not the two an option line takes, and it may carry a patchlevel:
+  # `ruby 3.3.10p183`. The patchlevel is dropped, because the only thing this
+  # is ever compared against is a Ruby derivation's `version`, which never has
+  # one.
+  #
+  # A value in any other shape throws rather than being read as far as it
+  # parses. JRuby writes `ruby 3.1.4 (jruby 9.4.5.0)`, and taking the 3.1.4
+  # from it would claim a match gems4nix cannot deliver.
+  parseRubyVersion =
+    lines:
+    let
+      idx = lib.lists.findFirstIndex (l: l == "RUBY VERSION") null lines;
+      body = if idx == null then [ ] else takeLines idx lines;
+      raw = if body == [ ] then null else builtins.head body;
+      m = if raw == null then null else builtins.match "   ruby ([0-9]+(\\.[0-9]+)*)(p[0-9]+)?" raw;
+    in
+    if raw == null then
+      null
+    else if m == null then
+      throw "gems4nix: cannot read the RUBY VERSION section of the lockfile: expected '   ruby X.Y.Z', got '${raw}'"
+    else
+      builtins.head m;
+
   # ── lockfile-level assembly (pure, no IO) ────────────────────
 
   # Parse the full content of a Gemfile.lock into its checksum, GEM, GIT and
@@ -590,6 +621,7 @@ let
         gitSections
         pathSections
         ;
+      rubyVersion = parseRubyVersion lines;
     };
 
   # Invert gem sections into a flat { gemName = [ remote ... ]; } lookup. A gem
@@ -745,6 +777,7 @@ in
     parseDependencies
     parseDependenciesSection
     takeDependenciesSection
+    parseRubyVersion
     parseLockfile
     indexRemotes
     mergeGemMetadata
