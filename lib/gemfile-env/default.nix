@@ -171,9 +171,11 @@ let
         else
           true;
 
-      # buildRubyGem defaults to nixpkgs' Ruby. Left to it, an overridden
+      # Every gem goes through here so it is built against the caller's `ruby`.
+      # buildRubyGem defaults to nixpkgs' own, and left to it an overridden
       # `ruby` would move GEM_PATH without moving the gems it points at. A
-      # per-gem `ruby` from gemConfig still wins.
+      # per-gem `ruby` from gemConfig still wins. A git or path gem takes the
+      # longer branch and gains the `src` and phases described above.
       buildGem =
         attrs:
         if attrs.source.type == "gem" then

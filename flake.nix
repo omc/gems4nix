@@ -106,6 +106,14 @@
             }) "PASS"
           );
 
+          # Asserts gemSrcOverrides reaches the build and rejects a name it
+          # cannot match.
+          gem-src-overrides = pkgs.writeText "gem-src-overrides" (
+            builtins.deepSeq (import ./test/integration/gem-src-overrides/wiring.nix {
+              inherit pkgs gemfileEnv;
+            }) "PASS"
+          );
+
           # Asserts an overridden `ruby` reaches the gems, not just GEM_PATH.
           ruby-override-wiring = pkgs.writeText "ruby-override-wiring" (
             builtins.deepSeq (import ./test/integration/ruby-override/wiring.nix {
