@@ -202,28 +202,6 @@ let
         };
       };
 
-  # given a bunch of lines that represent a GEM section, return the remote and the list of gems.
-  # we're not concerned with the version specs here, since we'll get that later from the checksum.
-  # this is just to reconstruct a url to the gem file later.
-  parseGemSection =
-    lines:
-    let
-      remoteStr = builtins.elemAt (lib.strings.splitString ": " (builtins.elemAt lines 0)) 1;
-      remote =
-        if (lib.strings.hasSuffix "/" remoteStr) then lib.strings.removeSuffix "/" remoteStr else remoteStr;
-      gems = lib.lists.map (
-        line:
-        let
-          parts = builtins.filter (s: s != "") (lib.strings.splitString " " line);
-          name = builtins.elemAt parts 0;
-        in
-        name
-      ) (lib.lists.drop 2 lines);
-    in
-    {
-      inherit remote gems;
-    };
-
   # ── GIT / PATH sections ──────────────────────────────────────
 
   # Split the body of a GIT or PATH section into its options and its gems.
@@ -238,9 +216,16 @@ let
   # A 6-space line names a dependency, not a gem to build from this section.
   # Count the spaces, or such a line becomes a gem that nothing can build.
   #
+  # A key in `repeatable` collects its values into a list, in the order the
+  # lockfile writes them. Every other key holds a single string and a repeat
+  # throws, because two answers to a question with one answer cannot be merged.
+  #
   # Returns: { headers = { remote = "..."; ... }; specLines = [ ... ]; hasSpecs = bool; }
   parseSectionBody =
-    lines:
+    {
+      lines,
+      repeatable ? [ ],
+    }:
     let
       step =
         acc: line:
@@ -266,14 +251,22 @@ let
           else
             let
               key = builtins.elemAt m 0;
+              value = builtins.elemAt m 1;
             in
-            if acc.headers ? ${key} then
-              throw "gems4nix: repeated option '${key}' in a GIT/PATH section"
+            if builtins.elem key repeatable then
+              acc
+              // {
+                headers = acc.headers // {
+                  ${key} = (acc.headers.${key} or [ ]) ++ [ value ];
+                };
+              }
+            else if acc.headers ? ${key} then
+              throw "gems4nix: repeated option '${key}' in a lockfile source section"
             else
               acc
               // {
                 headers = acc.headers // {
-                  ${key} = builtins.elemAt m 1;
+                  ${key} = value;
                 };
               };
 
@@ -287,6 +280,42 @@ let
     {
       inherit (result) headers specLines hasSpecs;
     };
+
+  # A GEM section names the remotes its gems come from, and the gems it
+  # provides. Versions come from CHECKSUMS, so only the names matter here.
+  #
+  # Bundler puts several `remote:` lines in one GEM section when a Gemfile
+  # declares more than one global source, and writes them last-declared-first,
+  # which is its own source-priority order. Keeping the lockfile's order means
+  # a fetch tries them in that order too.
+  #
+  # Only the 4-space lines are gems of this section. A 6-space line names a
+  # dependency, which some other section may well provide; counting it here
+  # claims this section's remote for a gem that is not on it.
+  parseGemSection =
+    lines:
+    let
+      body = parseSectionBody {
+        inherit lines;
+        repeatable = [ "remote" ];
+      };
+      h = body.headers;
+      unknown = builtins.filter (k: k != "remote") (builtins.attrNames h);
+      remotes = lib.lists.map (lib.strings.removeSuffix "/") (h.remote or [ ]);
+    in
+    if !body.hasSpecs then
+      throw "gems4nix: GEM section has no 'specs:' line"
+    else if unknown != [ ] then
+      throw "gems4nix: unsupported key '${builtins.head unknown}' in GEM section"
+    else if remotes == [ ] then
+      throw "gems4nix: GEM section has no 'remote:'"
+    else
+      {
+        inherit remotes;
+        # A name repeats once per locked platform, and every variant is on the
+        # same remote, so one entry per name says everything.
+        gems = lib.unique (lib.lists.map (l: (parseSpecLine l).gemName) body.specLines);
+      };
 
   # Options we recognise in a GIT section. An unrecognised option is an error,
   # because most options change which files the gem is built from. To ignore
@@ -343,7 +372,7 @@ let
   parseGitSection =
     lines:
     let
-      body = parseSectionBody lines;
+      body = parseSectionBody { inherit lines; };
       h = validateSection {
         kind = "GIT";
         inherit body;
@@ -368,7 +397,7 @@ let
   parsePathSection =
     lines:
     let
-      body = parseSectionBody lines;
+      body = parseSectionBody { inherit lines; };
       h = validateSection {
         kind = "PATH";
         inherit body;
@@ -563,23 +592,22 @@ let
         ;
     };
 
-  # Invert gem sections into a flat { gemName = remote; ... } lookup.
-  # First-writer-wins when a gem appears in multiple sections (builtins.listToAttrs
-  # keeps the first entry for duplicate keys).
-  # TODO: group by gem name for multiple remotes; e.g., depot depends on faraday
-  # which shows up in both but we prefer rubygems.org.
+  # Invert gem sections into a flat { gemName = [ remote ... ]; } lookup. A gem
+  # gets every remote of the section that provides it, because any of them may
+  # serve it and the lockfile's order is Bundler's priority order.
+  #
+  # First-writer-wins when a gem appears in more than one section
+  # (builtins.listToAttrs keeps the first entry for duplicate keys).
   indexRemotes =
     gemSections:
     builtins.listToAttrs (
-      lib.lists.flatten (
-        lib.lists.map (
-          section:
-          lib.lists.map (gem: {
-            name = gem;
-            value = section.remote;
-          }) section.gems
-        ) gemSections
-      )
+      lib.lists.concatMap (
+        section:
+        lib.lists.map (gem: {
+          name = gem;
+          value = section.remotes;
+        }) section.gems
+      ) gemSections
     );
 
   # Merge parsed checksums with group info and remote URLs into the final
@@ -611,7 +639,9 @@ let
           ;
         groups = groupsFor gemAttrs.gemName;
         source = gemAttrs.source // {
-          remotes = [ gemRemotes.${gemAttrs.gemName} ];
+          remotes =
+            gemRemotes.${gemAttrs.gemName}
+              or (throw "gems4nix: '${gemAttrs.gemName}' has a checksum but no GEM section provides it");
           type = "gem";
         };
       }) checksumSection;

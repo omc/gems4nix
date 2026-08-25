@@ -179,6 +179,12 @@ The pipeline has three stages:
    ruby-platform gems), calls `buildRubyGem` for each resolved gem, and
    combines them into a `buildEnv`.
 
+### Where a gem is fetched from
+
+A `GEM` section names the remotes its gems come from, and gems4nix gives every gem in that section every one of them, in the order the lockfile writes them. Bundler puts more than one `remote:` line in a single section when a `Gemfile` declares more than one global source, and it writes them last-declared-first, which is its own source-priority order. The fetch tries them in that order and stops at the first that serves the gem.
+
+Only the four-space lines under `specs:` are gems of a section. The six-space lines below each one name that gem's dependencies, which another section may well provide.
+
 ### Platform resolution
 
 Many gems ship precompiled native variants alongside a pure-ruby fallback.
