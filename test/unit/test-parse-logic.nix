@@ -630,6 +630,26 @@ let
       "development"
     ];
 
+  # A checksum names a gem that must have come from somewhere. If no GEM
+  # section provides it and no GIT or PATH section claims it either, we have
+  # nowhere to fetch it from, and `attribute missing` says none of that.
+  test_mergeGemMetadata_unsourced_checksum_throws =
+    assertThrows "mergeGemMetadata: a checksum no GEM section provides throws"
+      (mergeGemMetadata {
+        checksumSection = [
+          {
+            gemName = "rake";
+            version = "13.0.6";
+            platform = "ruby";
+            source = {
+              sha256 = "aaaa";
+            };
+          }
+        ];
+        gemRemotes = { };
+        gemGroups = { };
+      });
+
   test_mergeGemMetadata_missing_group_defaults_empty =
     let
       result = mergeGemMetadata {
@@ -1483,6 +1503,7 @@ let
     && test_indexRemotes_excludes_git_path
     # mergeGemMetadata
     && test_mergeGemMetadata
+    && test_mergeGemMetadata_unsourced_checksum_throws
     && test_mergeGemMetadata_missing_group_defaults_empty
     # mergeGemMetadata: git and path sources
     && test_mergeGemMetadata_git_and_path

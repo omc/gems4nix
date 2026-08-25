@@ -111,6 +111,9 @@ end
 **"gems4nix: the lockfile was resolved with Ruby X, and this environment is built with Ruby Y"**
 The `RUBY VERSION` section of your lockfile names a Ruby whose major.minor differs from the one `gemfileEnv` builds against. Gems install under `lib/ruby/gems/<major>.<minor>.0` and native extensions compile against that ABI, so every gem in the environment would be built for a Ruby the lockfile does not describe. Pass a matching `ruby` to `gemfileEnv`, or re-run `bundle lock` under the Ruby you build against. The same message at warning level, which does not stop the build, means the two differ only below the ABI. See [The Ruby the lockfile was resolved with](#the-ruby-the-lockfile-was-resolved-with).
 
+**"gems4nix: '&lt;gem&gt;' has a checksum but no GEM section provides it"**
+A `CHECKSUMS` line carries a hash, which means the gem came from a `GEM` section, and no `GEM` section in the lockfile lists it. There is nowhere to fetch it from. A hand-edited or truncated lockfile is the usual cause; regenerate it with `bundle lock`.
+
 **"gems4nix: PLUGIN SOURCE sections are not supported"**
 Your lockfile has a `PLUGIN SOURCE` section, written by a Bundler plugin that supplies gems from somewhere gems4nix does not know how to fetch. There is no way to build those gems here. Remove the plugin from the `Gemfile` and re-run `bundle lock`, or vendor the gems it provides as a `PATH` source.
 
