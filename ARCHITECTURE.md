@@ -8,7 +8,7 @@ flowchart TD
     parse["<b>parse.nix</b> — pure Nix<br/>reads GEM, GIT and PATH sections<br/>emits { gemName, version, platform, source, groups }"]
     resolve["<b>resolve.nix</b> — pure Nix<br/>filters by group and platform<br/>expands transitive deps<br/>picks one variant per name"]
     build["<b>default.nix</b> — nixpkgs<br/>applies gemConfig<br/>calls buildRubyGem<br/>combines into buildEnv"]
-    output([Derivation with all gems on GEM_PATH])
+    output([Derivation with all gems on GEM_PATH<br/>and git gems where Bundler reads them])
 
     input --> parse --> resolve --> build --> output
 ```
@@ -46,6 +46,11 @@ flowchart TD
    environment variables (needing no readable file). Both fail on different
    machines, so the choice belongs to the consumer, and each mode reports its
    own failure mode by name.
+10. A git gem gets a second view of itself in `bundler/gems/<repo>-<shortrev>`,
+    which is the only place Bundler reads one from, and the environment's
+    setup hook exports `GEM_HOME` so Bundler looks there. Both views rather
+    than one: moving the gem to satisfy Bundler would break the plain
+    `require` that a consumer who never boots through Bundler relies on.
 
 ## What We Use from Nixpkgs
 

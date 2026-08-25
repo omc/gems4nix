@@ -94,20 +94,15 @@ the less we maintain and the more we benefit from upstream fixes.
 
    The pipeline now resolves platform duplicates before applying gem configs, and applies them only when `platform == "ruby"`, so a precompiled variant never receives source-build overrides. Gated by `test_pipeline_precompiled_skips_gemConfig` and `test_pipeline_ruby_only_gets_gemConfig` in `test/unit/test-resolve-logic.nix`. Those tests assert against a local restatement of the pipeline rather than against `default.nix` itself, which is a real gap.
 
-10. **Open, and the single biggest consumer blocker. Produce Bundler-aware binstubs like `bundlerEnv` does.**
-    Our `buildEnv` creates a flat symlink forest of gems, but doesn't
-    generate Bundler-compatible binstubs. Upstream `bundlerEnv` runs
-    `gen-bin-stubs.rb` which generates wrappers that call `Bundler.setup()`
-    with the correct `GEM_PATH`, `BUNDLE_GEMFILE`, and `BUNDLE_FROZEN=1`.
+10. **Done, and without binstubs.** `require "bundler/setup"` resolves every source kind, and `bundle exec` runs.
 
-    Without these, `bundle exec` and Bundler's runtime dependency resolution
-    don't work in the Nix environment. Rails apps rely on `Bundler.setup()`
-    to activate exactly the right gem versions. A plain `buildEnv` will have
-    all gems on the `GEM_PATH` but Bundler won't know about them.
+    This item assumed the missing piece was `gen-bin-stubs.rb`. It was not. Bundler needs two things and neither is a binstub: a `GIT`-sourced gem has to sit in `bundler/gems/<repo>-<shortrev>`, and that directory is looked for under `Gem.dir`, so `GEM_HOME` has to name the environment. Each git gem now writes the checkout beside its ordinary install, symlinking its entries and carrying the serialized gemspec out of `specifications/`, and the environment's setup hook exports `GEM_HOME` as well as `GEM_PATH`.
 
-    **Action:** Either call `gen-bin-stubs.rb` in a `postBuild` hook (like
-    `bundlerEnv` does), or provide a `confFiles` derivation with the
-    Gemfile/Gemfile.lock pair and delegate to upstream's stubs machinery.
+    Binstubs turned out to be unnecessary: the ones `gem install` already writes into each gem's `bin` are on the environment's path, and `bundle exec rake --version` finds one there. `BUNDLE_PATH` is not an alternative to `GEM_HOME`; Bundler appends `ruby/<version>` to it, and the checkout is missed the same way.
+
+    Gated end to end by the `bundler-setup` check in `examples/complex`, which boots through `bundler/setup` against a read-only environment with `BUNDLE_FROZEN=1` and asserts each of the three source kinds resolved through the source its lockfile section names. Gated without the network by `test/integration/bundler-layout/layout.nix` and `test/unit/test-bundler-logic.nix`.
+
+    One limitation remains, recorded in `test/unit/test-pending-logic.nix` under `nonTests.git_gems_with_native_extensions_are_unusable_under_bundler`: Bundler looks for a git gem's compiled extension under the git scope, and RubyGems installs it under the gem's name and version.
 
 11. **Open. Emit a `gemset.nix`-compatible attrset for interop.**
     The parsed gem metadata is close (but not identical) to the
@@ -138,7 +133,9 @@ the less we maintain and the more we benefit from upstream fixes.
 
     So a git or path gem builds as `type = "gem"` with a `src` gems4nix supplies: `builtins.fetchGit` at the locked revision, or the resolved path. `gitMinimal` goes on the build path and `preBuild` runs `git init && git add -A`, because many gemspecs compute `spec.files` from `git ls-files` and would otherwise install a gem containing nothing. `postInstall` refuses a gem with no gemspec or an empty gem directory rather than leaving that to fail at `require`.
 
-    Three limitations stand, all recorded in `test/unit/test-pending-logic.nix` under `nonTests`: Bundler cannot see a git gem (#10), a git gem with a native extension has no `gemPath` (#9), and `builtins.fetchGit` runs at evaluation time and is not cacheable, for which `gemSrcOverrides` is the escape hatch.
+    A git gem is also given the `bundler/gems/<repo>-<shortrev>` checkout Bundler reads it from, so both `require` and `require "bundler/setup"` find it (#10).
+
+    Three limitations stand, all recorded in `test/unit/test-pending-logic.nix` under `nonTests`. A git gem's compiled extension is installed under a name Bundler does not look for (#10). A git gem with a native extension has no `gemPath` (#9). And `builtins.fetchGit` runs at evaluation time and is not cacheable, for which `gemSrcOverrides` is the escape hatch.
 
 14. **Partly done. The parsers exist; nothing calls them.**
     The `specs:` half is wired: `parseDependencies` feeds the expansion in #12, and it reads every `specs:` block, GIT and PATH sections included, so a git gem's own dependencies survive the group filter too.
