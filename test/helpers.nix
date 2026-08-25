@@ -47,6 +47,11 @@
       platform ? "ruby",
       groups ? [ "default" ],
       version ? "1.0.0",
+      source ? {
+        sha256 = "fake";
+        remotes = [ "https://rubygems.org" ];
+        type = "gem";
+      },
     }:
     {
       inherit
@@ -54,11 +59,7 @@
         platform
         groups
         version
+        source
         ;
-      source = {
-        sha256 = "fake";
-        remotes = [ "https://rubygems.org" ];
-        type = "gem";
-      };
     };
 }
