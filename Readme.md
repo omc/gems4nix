@@ -92,6 +92,18 @@ You declared `usernameVar`/`passwordVar` for that host but the variable is empty
 **"gems4nix: cannot read the netrc for &lt;host&gt; at &lt;path&gt;"**
 You declared a `netrcFile` the build user cannot read. Absent and unreadable look identical from inside the build, so check both: every directory on the path must be traversable by the build user, and on Linux the path must be in `extra-sandbox-paths`. See [Mode 1: from a file you control](#mode-1-from-a-file-you-control).
 
+**"gems4nix: '&lt;gem&gt;' has no checksum and no GIT/PATH source in the lockfile"**
+A `CHECKSUMS` line carries no hash, which means the gem came from a `GIT` or `PATH` section, and no such section in the lockfile provides it. The usual cause is a hand-edited or truncated lockfile. Regenerate it with `bundle lock`. gems4nix refuses rather than dropping the gem, because a dropped gem shows up much later as a `LoadError` naming a layer that is not at fault.
+
+**"gems4nix: PATH source '&lt;dir&gt;' does not exist at &lt;path&gt;"**
+A `PATH` section's `remote:` resolved to a directory that is not there. `remote:` is relative to `root`, which defaults to the directory holding the `Gemfile`. If the Gemfile is not co-located with its path gems, pass `root` explicitly. Note that Nix can only see a path inside the flake's source tree.
+
+**"Bundler::GitError: ... is not yet checked out. Run `bundle install` first."**
+Your app boots through `require "bundler/setup"` and one of its gems comes from a `GIT` section. Bundler looks for a git gem in a directory gems4nix does not write. There is no workaround short of vendoring the gem as a `PATH` source. See [Known Limitations](#known-limitations).
+
+**"could not read Username for 'https://github.com'" while evaluating**
+A private `GIT` remote is fetched by `builtins.fetchGit`, which shells out to your own `git`, and https with no credential helper cannot authenticate. A `url."git@github.com:".insteadOf "https://github.com/"` rewrite in your git config works. `credentials` does not apply here: it covers private gem registries, not git remotes.
+
 **"gems4nix: unsupported system '...'"**
 The automatic platform detection does not recognize your
 `stdenv.hostPlatform.system`. Pass an explicit `platforms` list:
@@ -138,8 +150,10 @@ mapping to skip Bundler group inference entirely.
 The pipeline has three stages:
 
 1. **Parse** (`parse.nix`) -- reads `Gemfile.lock` in pure Nix and produces a
-   list of gem attribute sets with name, version, platform, source URL, and
-   SHA256 from the CHECKSUMS section.
+   list of gem attribute sets with name, version, platform and source. A gem
+   from a `GEM` section carries its remote and its SHA256 from the `CHECKSUMS`
+   section; a gem from a `GIT` or `PATH` section carries the revision or the
+   directory to build from instead.
 
 2. **Resolve** (`resolve.nix`) -- filters gems by requested groups and target
    platforms, expands transitive dependencies, and resolves each gem name to
@@ -172,6 +186,50 @@ gems4nix narrows this down in three steps, matching what `bundle install` does:
 3. **One gem per name.** After resolution each gem name maps to exactly one
    derivation.
 
+### Git and path gem sources
+
+A `Gemfile` entry with `git:`, `github:` or `path:` puts a `GIT` or `PATH` section at the top of the lockfile, and the gem gets a `CHECKSUMS` line with no hash:
+
+```
+GIT
+  remote: https://github.com/omc/errgonomic.git
+  revision: f06314af89209f855019219fd198513855be0fd5
+  branch: main
+  specs:
+    errgonomic (0.5.1)
+      concurrent-ruby (~> 1.0)
+
+PATH
+  remote: vendor/hello_gem
+  specs:
+    hello_gem (0.1.0)
+```
+
+Both build with no extra configuration. A git gem is fetched by `builtins.fetchGit` at the pinned revision; a path gem is built from `root + "/" + remote`, where `root` defaults to the directory holding the `Gemfile`. Either way the result is an ordinary gem on the `GEM_PATH`, so `require` finds it.
+
+Because `builtins.fetchGit` runs while Nix evaluates, and its result is not something a binary cache can serve, `gemSrcOverrides` replaces the source of a named gem with one you fetch yourself:
+
+```nix
+gemfileEnv {
+  name = "app-gems";
+  gemfile = ./Gemfile;
+  gemfileLock = ./Gemfile.lock;
+
+  gemSrcOverrides.errgonomic = pkgs.fetchFromGitHub {
+    owner = "omc";
+    repo = "errgonomic";
+    rev = "f06314af89209f855019219fd198513855be0fd5";
+    hash = "sha256-...";
+  };
+}
+```
+
+The value can also be a function, which receives the gem's parsed `source` and returns the `src` to use. Naming a gem with no `GIT` or `PATH` source is an evaluation error, so a misspelled name fails loudly rather than falling back to the network fetch you were avoiding.
+
+A lockfile gems4nix cannot honour is an evaluation error rather than a gem missing from the environment: a hashless `CHECKSUMS` line no source claims, a `PLUGIN SOURCE` section, a `glob:` option, and any unrecognised key on a `GIT` or `PATH` section all throw and name what they found.
+
+See [Known Limitations](#known-limitations) before relying on a git gem. The largest one is that Bundler cannot see it.
+
 ## Configuration
 
 `gemfileEnv` accepts these parameters:
@@ -188,6 +246,8 @@ gems4nix narrows this down in three steps, matching what `bundle install` does:
 | `extraFiles` | `{}` | `{ "relative/dest" = ./src; }` — files the gemspec reads at load time |
 | `gemConfig` | `nixpkgs.defaultGemConfig` | Per-gem build overrides |
 | `credentials` | `{}` | Private registry credentials keyed by remote host; each entry is `{ netrcFile }` or `{ usernameVar, passwordVar }` |
+| `root` | directory holding the `Gemfile` | Directory that `PATH` source `remote:` values resolve against |
+| `gemSrcOverrides` | `{}` | `{ gemName = src-or-function; }` — replaces the source of a git or path gem |
 | `ruby` | `nixpkgs.ruby` | Ruby derivation the gems and `GEM_PATH` are both built against |
 | `debug` | `false` | Trace each gem as it is built |
 
@@ -309,8 +369,13 @@ map.
 
 ## Known Limitations
 
-- **Git and path gem sources are not yet supported.** The parser skips them
-  gracefully (no crash), but they are not included in the environment.
+- **A git gem is invisible to `require "bundler/setup"`.** gems4nix installs it as an ordinary gem, so plain `require` finds it on the `GEM_PATH`. Bundler looks for a git gem in `bundler/gems/<name>-<shortrev>` under its own install path, which gems4nix never writes, and raises `Bundler::GitError: ... is not yet checked out. Run 'bundle install' first.` Every stock Rails app boots that way. Gems from `GEM` and `PATH` sections are unaffected; vendoring the gem as a path source is the workaround.
+- **A git gem with a native extension cannot see its build-time siblings.** `buildRubyGem` takes those through `gemPath`, and gems4nix does not set it. This is not specific to git gems, but a git gem is where it bites first.
+- **`builtins.fetchGit` runs at evaluation time.** Any command that evaluates an output holding a git gem needs the network then, and needs credentials then for a private repository. The result is not a fixed-output derivation, so no binary cache can serve it. `gemSrcOverrides` is the way out.
+- **A private git remote depends on the invoking user's git configuration**, which is a different axis from `credentials` above. `credentials` covers private *registries* fetched over `fetchurl`; a git remote is fetched by the user's own `git`. A `url.<ssh>.insteadOf` rewrite works. A bare https remote fails with `could not read Username`. Nix's `access-tokens` and `netrc-file` settings configure Nix's downloader, not this `git`, so neither applies.
+- **`branch:`, `tag:` and `ref:` are recorded and never used.** The fetch goes by revision alone, which is what determines the store path, so adding any of them would return the identical result.
+- **A path gem must live inside the flake's source tree.** Its `remote:` resolves against `root`, and Nix can only copy a source it can see.
+- **Only GitHub git remotes have been tried.** A locked revision is often not a branch tip, and a server with `uploadpack.allowAnySHA1InWant` off refuses to send one on its own; gems4nix asks for every ref to work around that.
 - **Bundler >= 2.5 is required**, and its `CHECKSUMS` section has to be enabled explicitly with `bundle lock --add-checksums`.
 - **Group extraction uses Ruby IFD** by default. This is an impurity at Nix
   evaluation time. Pass `gemGroups` to avoid it.

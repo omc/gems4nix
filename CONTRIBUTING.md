@@ -19,6 +19,10 @@ nix eval --file test/unit/test-parse.nix --json
 nix eval --file test/unit/test-resolve.nix --json
 nix eval --file test/unit/test-pipeline.nix --json
 nix eval --file test/unit/test-credentials.nix --json
+nix eval --file test/unit/test-arguments.nix --json
+
+# The pending ledger: every known limitation is still a limitation
+nix eval --file test/unit/test-pending.nix ledger
 
 # Integration examples
 cd examples/simple  && nix flake check --no-write-lock-file
@@ -30,12 +34,16 @@ nix eval --file test/unit/test-parse.nix --json && \
 nix eval --file test/unit/test-resolve.nix --json && \
 nix eval --file test/unit/test-pipeline.nix --json && \
 nix eval --file test/unit/test-credentials.nix --json && \
+nix eval --file test/unit/test-arguments.nix --json && \
+nix eval --file test/unit/test-pending.nix ledger && \
 echo "unit tests passed" && \
 for ex in simple medium complex; do
   (cd examples/$ex && nix flake check --no-write-lock-file) || exit 1
 done && \
 echo "all tests passed"
 ```
+
+`examples/complex` has a git-sourced gem, and `builtins.fetchGit` runs while Nix evaluates the flake. That check therefore needs the network every time, even when every gem is already in the store, and it obeys the git configuration of whoever runs it: a `url.<ssh>.insteadOf` rewrite for `https://github.com/` redirects the fetch to ssh, and it fails there if the ssh agent holds no usable key.
 
 ## How to Add a Test
 
@@ -44,6 +52,8 @@ echo "all tests passed"
    - **Resolution** (filtering, platform matching) -- `test/unit/test-resolve-logic.nix`
    - **Pipeline** (end-to-end parse + resolve) -- `test/unit/test-pipeline-logic.nix`
    - **Credentials** (private registry auth) -- `test/unit/test-credentials-logic.nix`
+   - **Argument surface** (what `gemfileEnv` accepts) -- `test/unit/test-arguments-logic.nix`
+   - **A known limitation you are not fixing yet** -- `test/unit/test-pending-logic.nix`
 
 2. Add a test case. Each test is an `assertEq` call with a descriptive name:
    ```nix
@@ -59,6 +69,12 @@ echo "all tests passed"
    nix eval --file test/unit/test-parse.nix --json
    ```
    It returns `true` on success or throws with the test name and diff on failure.
+
+## How to Record a Limitation You Are Not Fixing
+
+`test/unit/test-pending-logic.nix` holds tests written as the behaviour gems4nix should have and does not. Each one fails today, and the `ledger` it exports asserts that each one still fails, so `nix flake check` turns red the moment a limitation quietly stops being one. Write the test as a positive assertion, say what a fix would have to change, and name the file the test should move to when someone makes it pass.
+
+A limitation no Nix expression can reach — a Bundler behaviour, a git server's behaviour, the evaluating user's configuration — goes in the same file's `nonTests` attrset as prose. Say why no test can reach it and what a test would need, so the next reader does not rediscover that from scratch.
 
 ## How to Contribute a Lockfile Fixture (Bug Reports)
 
@@ -108,7 +124,7 @@ Key principles:
 - Unit tests use synthetic lockfile content (inline strings), not real files.
 - Integration tests (`examples/`) use real `Gemfile.lock` files from rubygems.org
   and build actual gem derivations.
-- Shared assertion helpers (`assertEq`, `assertThrows`) live in `test/helpers.nix`.
+- Shared assertion helpers (`assertEq`, `assertThrows`, `expectedFailure`) live in `test/helpers.nix`.
 
 ## Code Style
 
