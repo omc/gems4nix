@@ -146,7 +146,11 @@ let
     line:
     let
       stripped = lib.strings.removePrefix "  " line;
-      parts = lib.splitString " " stripped;
+      # Empty tokens are dropped, so this indexes the same way parseSpecLine
+      # does. Two functions splitting one line two ways report the wrong
+      # problem: a doubled space between name and version used to come back as
+      # a complaint about the hash.
+      parts = builtins.filter (s: s != "") (lib.strings.splitString " " stripped);
       numParts = builtins.length parts;
 
       # Git and path source gems appear in CHECKSUMS without a hash:
@@ -156,8 +160,11 @@ let
       # GEM-sourced gems always have 3+ parts: NAME (VERSION) sha256=DIGEST
       isHashless = numParts < 3;
 
+      # A CHECKSUMS entry is indented exactly two spaces. Anything deeper is a
+      # line from some other section, which means the caller sliced the wrong
+      # block. Filtering the tokens above hides that, so check the raw text.
       _ =
-        if !isHashless && builtins.elemAt parts 0 == "" then
+        if lib.strings.hasPrefix " " stripped then
           throw "gems4nix (internal): parseChecksumLine: unexpected leading whitespace in line: ${line}"
         else
           true;
@@ -179,6 +186,7 @@ let
     in
     # Git/path gems without a hash: return null (skipped by caller)
     if isHashless then
+      assert _ == true;
       null
     else
       assert _ == true;

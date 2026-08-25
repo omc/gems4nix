@@ -160,6 +160,24 @@ let
     parseChecksumLine "    zeitwerk (2.6.18) sha256=abc123"
   );
 
+  # A doubled space is malformed and Bundler never writes one, but the
+  # complaint has to name the real problem: the version, not the hash.
+  test_parseChecksum_double_space =
+    let
+      result = parseChecksumLine "  zeitwerk  (2.6.18) sha256=deadbeef";
+    in
+    assertEq "parseChecksumLine: a doubled space does not shift the hash" result.source.sha256
+      "deadbeef"
+    && assertEq "parseChecksumLine: a doubled space does not shift the version" result.version "2.6.18"
+    && assertEq "parseChecksumLine: a doubled space does not shift the name" result.gemName "zeitwerk";
+
+  # A hashless line is still subject to the indent rule. Four spaces is a gem
+  # line from a specs: block, not a CHECKSUMS entry, and returning null for one
+  # would let it pass for a git or path gem.
+  test_parseChecksum_over_indented_hashless_throws = assertThrows "parseChecksumLine: an over-indented hashless line throws rather than returning null" (
+    parseChecksumLine "    concurrent-ruby (1.3.6)"
+  );
+
   test_parseChecksum_empty_line_returns_null =
     assertEq "parseChecksumLine: empty line returns null" (parseChecksumLine "")
       null;
@@ -1247,6 +1265,8 @@ let
     && test_parseChecksum_multi_segment_platform
     && test_parseChecksum_missing_hash_returns_null
     && test_parseChecksum_extra_leading_spaces
+    && test_parseChecksum_double_space
+    && test_parseChecksum_over_indented_hashless_throws
     && test_parseChecksum_empty_line_returns_null
     # parseGemSection
     && test_parseGemSection_basic
