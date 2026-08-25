@@ -18,6 +18,7 @@ nix flake check
 nix eval --file test/unit/test-parse.nix --json
 nix eval --file test/unit/test-resolve.nix --json
 nix eval --file test/unit/test-pipeline.nix --json
+nix eval --file test/unit/test-credentials.nix --json
 
 # Integration examples
 cd examples/simple  && nix flake check --no-write-lock-file
@@ -28,6 +29,7 @@ cd examples/complex && nix flake check --no-write-lock-file
 nix eval --file test/unit/test-parse.nix --json && \
 nix eval --file test/unit/test-resolve.nix --json && \
 nix eval --file test/unit/test-pipeline.nix --json && \
+nix eval --file test/unit/test-credentials.nix --json && \
 echo "unit tests passed" && \
 for ex in simple medium complex; do
   (cd examples/$ex && nix flake check --no-write-lock-file) || exit 1
@@ -41,6 +43,7 @@ echo "all tests passed"
    - **Parsing** (lockfile text to gem attrs) -- `test/unit/test-parse-logic.nix`
    - **Resolution** (filtering, platform matching) -- `test/unit/test-resolve-logic.nix`
    - **Pipeline** (end-to-end parse + resolve) -- `test/unit/test-pipeline-logic.nix`
+   - **Credentials** (private registry auth) -- `test/unit/test-credentials-logic.nix`
 
 2. Add a test case. Each test is an `assertEq` call with a descriptive name:
    ```nix

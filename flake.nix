@@ -2,7 +2,7 @@
   description = "Bundle Ruby gems into an environment, using Bundler checksums";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs?ref=24.11";
+    nixpkgs.url = "github:NixOS/nixpkgs?ref=26.05";
   };
 
   outputs =
@@ -58,11 +58,45 @@
             gemfileLock = ./test/integration/platform-gems/Gemfile.lock;
             groups = [ "default" ];
           };
+
+          gemspecDirectiveGems = gemfileEnv {
+            name = "gemspec-directive-test";
+            gemfile = ./test/integration/gemspec-directive/Gemfile;
+            gemfileLock = ./test/integration/gemspec-directive/Gemfile.lock;
+            gemspec = ./test/integration/gemspec-directive/foo.gemspec;
+            extraFiles = {
+              "lib/foo/version.rb" = ./test/integration/gemspec-directive/lib/foo/version.rb;
+            };
+            groups = [ "default" ];
+          };
         in
         {
           unit-resolve = nixEvalCheck "resolve" ./test/unit/test-resolve-logic.nix;
           unit-parse = nixEvalCheck "parse" ./test/unit/test-parse-logic.nix;
           unit-pipeline = nixEvalCheck "pipeline" ./test/unit/test-pipeline-logic.nix;
+          unit-credentials = nixEvalCheck "credentials" ./test/unit/test-credentials-logic.nix;
+          unit-arguments = nixEvalCheck "arguments" ./test/unit/test-arguments-logic.nix;
+
+          # Asserts credential plumbing on derivation attributes only; no fetch.
+          credentials-wiring = pkgs.writeText "credentials-wiring" (
+            builtins.deepSeq (import ./test/integration/credentials/wiring.nix {
+              inherit pkgs gemfileEnv;
+            }) "PASS"
+          );
+
+          # Asserts that gemfileEnv rejects an argument it does not declare.
+          arguments-strictness = pkgs.writeText "arguments-strictness" (
+            builtins.deepSeq (import ./test/integration/arguments/strictness.nix {
+              inherit pkgs gemfileEnv;
+            }) "PASS"
+          );
+
+          # Asserts an overridden `ruby` reaches the gems, not just GEM_PATH.
+          ruby-override-wiring = pkgs.writeText "ruby-override-wiring" (
+            builtins.deepSeq (import ./test/integration/ruby-override/wiring.nix {
+              inherit pkgs gemfileEnv;
+            }) "PASS"
+          );
 
           integration-platform-gems =
             pkgs.runCommand "integration-platform-gems"
@@ -74,6 +108,19 @@
               }
               ''
                 ruby ${./test/integration/platform-gems/validate.rb}
+                touch $out
+              '';
+
+          integration-gemspec-directive =
+            pkgs.runCommand "integration-gemspec-directive"
+              {
+                buildInputs = [
+                  pkgs.ruby
+                  gemspecDirectiveGems
+                ];
+              }
+              ''
+                ruby ${./test/integration/gemspec-directive/validate.rb}
                 touch $out
               '';
         }
