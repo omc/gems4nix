@@ -596,19 +596,33 @@ let
   # gets every remote of the section that provides it, because any of them may
   # serve it and the lockfile's order is Bundler's priority order.
   #
-  # First-writer-wins when a gem appears in more than one section
-  # (builtins.listToAttrs keeps the first entry for duplicate keys).
+  # Two sections claiming one gem is not a lockfile Bundler writes: it locks a
+  # resolved spec under the single source that resolved it. There is also no
+  # rule that would say which one wins, and Bundler does not invent one — it
+  # tells the user to name the source in the Gemfile. Do the same rather than
+  # taking whichever section came first, which reads as a decision and is not.
   indexRemotes =
     gemSections:
-    builtins.listToAttrs (
-      lib.lists.concatMap (
+    let
+      entries = lib.lists.concatMap (
         section:
         lib.lists.map (gem: {
           name = gem;
           value = section.remotes;
         }) section.gems
-      ) gemSections
-    );
+      ) gemSections;
+
+      claimed = builtins.groupBy (e: e.name) entries;
+      contested = builtins.attrNames (lib.attrsets.filterAttrs (_: v: builtins.length v > 1) claimed);
+    in
+    if contested != [ ] then
+      let
+        gemName = builtins.head contested;
+        remotes = lib.lists.concatMap (e: e.value) claimed.${gemName};
+      in
+      throw "gems4nix: '${gemName}' is provided by more than one GEM section in the lockfile (${lib.concatStringsSep ", " remotes}); add it to the source block for the remote you want it from and relock"
+    else
+      builtins.listToAttrs entries;
 
   # Merge parsed checksums with group info and remote URLs into the final
   # gem metadata list that the rest of the pipeline expects.

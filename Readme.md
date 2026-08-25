@@ -99,6 +99,15 @@ A `CHECKSUMS` line carries no hash, which means the gem came from a `GIT` or `PA
 **"gems4nix: PATH source '&lt;dir&gt;' does not exist at &lt;path&gt;"**
 A `PATH` section's `remote:` resolved to a directory that is not there. `remote:` is relative to `root`, which defaults to the directory holding the `Gemfile`. If the Gemfile is not co-located with its path gems, pass `root` explicitly. Note that Nix can only see a path inside the flake's source tree.
 
+**"gems4nix: '&lt;gem&gt;' is provided by more than one GEM section in the lockfile"**
+Two `GEM` sections both list that gem, and nothing in the lockfile says which remote it should come from. Bundler locks a resolved gem under the single source that resolved it, so this is not a lockfile `bundle lock` writes; a hand-edited or merged one is the usual cause. Pick a remote in the `Gemfile` with a source block and re-run `bundle lock`:
+
+```ruby
+source "https://rubygems.pkg.github.com/omc" do
+  gem "depot"
+end
+```
+
 **"gems4nix: PLUGIN SOURCE sections are not supported"**
 Your lockfile has a `PLUGIN SOURCE` section, written by a Bundler plugin that supplies gems from somewhere gems4nix does not know how to fetch. There is no way to build those gems here. Remove the plugin from the `Gemfile` and re-run `bundle lock`, or vendor the gems it provides as a `PATH` source.
 
@@ -184,6 +193,8 @@ The pipeline has three stages:
 A `GEM` section names the remotes its gems come from, and gems4nix gives every gem in that section every one of them, in the order the lockfile writes them. Bundler puts more than one `remote:` line in a single section when a `Gemfile` declares more than one global source, and it writes them last-declared-first, which is its own source-priority order. The fetch tries them in that order and stops at the first that serves the gem.
 
 Only the four-space lines under `specs:` are gems of a section. The six-space lines below each one name that gem's dependencies, which another section may well provide.
+
+A gem that two `GEM` sections both claim is an evaluation error. Bundler locks a resolved gem under the single source that resolved it, so this is not a lockfile it writes, and it has no rule that would pick a winner — faced with the same ambiguity during resolution it tells you to name the source in the `Gemfile`. gems4nix says the same rather than taking whichever section came first, which would read as a decision and is not.
 
 ### Platform resolution
 

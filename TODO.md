@@ -16,12 +16,14 @@
    section iterates ~1000 lines. This isn't a correctness bug but is worth
    noting for very large lockfiles.
 
-3. **Open. `indexRemotes` is first-writer-wins for duplicate gem names.**
-   `builtins.listToAttrs` on a flattened list means if the same gem name
-   appears in multiple GEM sections (e.g., `faraday` from both rubygems.org
-   and a private registry), only the first section's remote survives. The TODO
-   in `parse.nix` acknowledges this, but the current behavior is
-   silently arbitrary rather than loudly wrong.
+3. **Done. A gem carries every remote its GEM section declares, and a contested gem is refused.**
+   `parseGemSection` reads a section by indent depth: every `  remote:` line is a remote of that section, and only the four-space lines under `specs:` are its gems. Bundler writes several `remote:` lines into one section when a Gemfile declares more than one global source, last-declared-first, which is its own source-priority order; the list keeps that order and `fetchurl` tries the urls in it.
+
+   The six-space dependency lines used to count as gems, which claimed the section's remote for gems another section provides. Measured against `omc/sprout`: its private `depot` section lists `faraday` and six other rubygems.org gems as dependencies, and each of them claimed `rubygems.pkg.github.com`. Nothing broke only because `builtins.listToAttrs` kept the earlier rubygems.org entry — an accident of the order Bundler happened to write the two sections in.
+
+   A gem that two `GEM` sections both claim is now an evaluation error. Bundler locks a resolved gem under the single source that resolved it, so no lockfile it writes has one, and it invents no tie-break for the same ambiguity during resolution: `Bundler::SourceMap#all_requirements` tells the user to name the source in the Gemfile, and raises `SecurityError` in `bundler_4_mode`.
+
+   Gated in `test/unit/test-parse-logic.nix` by `test_parseGemSection_multiple_remotes`, `test_parseGemSection_deps_excluded`, `test_parseGemSection_platform_variants_collapse`, `test_parseGemSection_missing_remote_throws`, `test_parseGemSection_missing_specs_throws`, `test_parseGemSection_unknown_key_throws`, `test_indexRemotes_carries_every_remote` and `test_indexRemotes_duplicate_gem_throws`.
 
 4. **Done. GIT and PATH sections are parsed and built.**
    `parseGitSection` and `parsePathSection` read the two source section types by indent depth, and `mergeGemMetadata` folds their gems into the same list the `CHECKSUMS` gems arrive in. `examples/complex` builds `errgonomic` (git) and `hello_gem` (path) and its validator loads both. See #13 for the build half.
@@ -48,7 +50,7 @@ At the `gemfileEnv` level the guards are gated by `test/integration/lockfile-gua
 
    Two more jobs run beside it. `unit` evaluates the standalone `test/unit/test-*.nix` wrappers, which reach the same logic through an unpinned `fetchTarball` rather than through the flake's `pkgs.lib`. `examples` runs `nix flake check` in each of `examples/{simple,medium,complex}`, which cannot join the root flake: they are standalone flakes with a `path:../..` input, and pulling them in would be a self-reference cycle. CI is `x86_64-linux` only.
 
-   No test gates this one, and none can: what CI runs is evidence produced by a run, not an assertion the suite can make about itself. The thirteen checks `nix flake check` executes are `unit-parse`, `unit-resolve`, `unit-pipeline`, `unit-credentials`, `unit-arguments`, `unit-pending`, `credentials-wiring`, `arguments-strictness`, `lockfile-guards`, `git-path-wiring`, `ruby-override-wiring`, `integration-platform-gems` and `integration-gemspec-directive`.
+   No test gates this one, and none can: what CI runs is evidence produced by a run, not an assertion the suite can make about itself. The seventeen checks `nix flake check` executes are `arguments-strictness`, `bundler-gem-home-guard`, `bundler-git-repo-with-two-gems`, `bundler-layout`, `credentials-wiring`, `git-path-wiring`, `integration-gemspec-directive`, `integration-platform-gems`, `lockfile-guards`, `ruby-override-wiring`, `unit-arguments`, `unit-bundler`, `unit-credentials`, `unit-parse`, `unit-pending`, `unit-pipeline` and `unit-resolve`.
 
 7. **Open. `gem-groups.rb` group propagation may over-propagate.**
    The Ruby script iterates all specs and propagates groups through

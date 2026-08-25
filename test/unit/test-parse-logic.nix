@@ -465,9 +465,9 @@ let
       "https://rubygems.org"
     ];
 
-  test_indexRemotes_first_writer_wins =
-    let
-      result = indexRemotes [
+  test_indexRemotes_duplicate_gem_throws =
+    assertThrows "indexRemotes: one gem claimed by two GEM sections throws"
+      (indexRemotes [
         {
           remotes = [ "https://rubygems.org" ];
           gems = [ "faraday" ];
@@ -476,12 +476,7 @@ let
           remotes = [ "https://private.example.com" ];
           gems = [ "faraday" ];
         }
-      ];
-    in
-    # builtins.listToAttrs keeps the first occurrence when names collide
-    assertEq "indexRemotes: duplicate gem uses first remote" result.faraday [
-      "https://rubygems.org"
-    ];
+      ]);
 
   # ── mergeGemMetadata ─────────────────────────────────────────
 
@@ -1370,7 +1365,7 @@ let
     # indexRemotes
     && test_indexRemotes
     && test_indexRemotes_carries_every_remote
-    && test_indexRemotes_first_writer_wins
+    && test_indexRemotes_duplicate_gem_throws
     && test_indexRemotes_excludes_git_path
     # mergeGemMetadata
     && test_mergeGemMetadata
