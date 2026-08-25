@@ -102,11 +102,11 @@
                 touch $out
               '';
 
-          # GEM_HOME is what decides where Bundler looks for a git gem, and it
-          # is read-only here on purpose: an environment that only works when
-          # Bundler can write to it is not an environment. BUNDLE_FROZEN turns
-          # a lockfile Bundler wants to rewrite into an error rather than a
-          # rewrite nobody sees.
+          # Nothing here points Ruby at the gems: the environment's setup hook
+          # does that, and an app that has to be told where its gems are is not
+          # the thing being tested. The gems are read-only store paths on
+          # purpose, and BUNDLE_FROZEN turns a lockfile Bundler wants to
+          # rewrite into an error rather than a rewrite nobody sees.
           bundler-setup =
             pkgs.runCommand "complex-bundler-setup"
               {
@@ -116,8 +116,6 @@
                 ];
               }
               ''
-                export GEM_HOME="${gems}/${pkgs.ruby.gemPath}"
-                export GEM_PATH="$GEM_HOME"
                 export BUNDLE_GEMFILE="${gemfileDir}/Gemfile"
                 export BUNDLE_FROZEN=1
                 ruby ${./bundler-setup.rb}

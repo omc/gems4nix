@@ -1,10 +1,9 @@
-# Does a git gem get the directory Bundler resolves it out of?
+# Does a git gem get what Bundler needs to resolve it?
 #
 # Bundler reads a GIT-sourced gem only from bundler/gems/<repo>-<shortrev>
-# under its install path. Writing that directory is what separates an
-# environment a stock Rails app can boot against from one that raises
-# Bundler::GitError, and nothing about the RubyGems layout reveals which one
-# you have.
+# under its install path, and that path is Gem.dir. Both halves have to be
+# right, and neither is visible from the RubyGems layout: an environment that
+# raises Bundler::GitError looks exactly like one that does not.
 #
 # The lockfile's git remote is never fetched: gemSrcOverrides supplies the
 # source, so this evaluates with no network. The gem's name and its
@@ -57,7 +56,16 @@ let
     assertEq "a path gem writes no Bundler checkout" (hasInfix "bundler/gems" (postInstallOf "gadget"))
       false;
 
-  allTests = test_git_gem_gets_a_bundler_checkout && test_path_gem_gets_no_bundler_checkout;
+  # An environment that leaves GEM_HOME alone sends Bundler looking for the
+  # checkout under whatever GEM_HOME the caller happened to inherit.
+  test_setup_hook_sets_gem_home =
+    assertEq "the environment's setup hook exports GEM_HOME" (hasInfix "export GEM_HOME=" env.postBuild)
+      true;
+
+  allTests =
+    test_git_gem_gets_a_bundler_checkout
+    && test_path_gem_gets_no_bundler_checkout
+    && test_setup_hook_sets_gem_home;
 
 in
 allTests

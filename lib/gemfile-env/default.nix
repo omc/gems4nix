@@ -311,9 +311,17 @@ let
       buildEnv {
         name = "${name}-${lib.strings.concatStringsSep "-" groups}-${lib.strings.concatStringsSep "-" resolvedPlatforms}";
         paths = finalGems;
+        # GEM_HOME is what decides where Bundler looks for a git gem: its
+        # install path is Gem.dir, and BUNDLE_PATH is not a substitute because
+        # Bundler appends ruby/<version> to that one. Setting it unconditionally
+        # rather than only when unset, because an inherited GEM_HOME is exactly
+        # the case where a git gem goes missing and nothing says why. The
+        # environment is read-only, so `gem install` into it fails; declare the
+        # gem in the Gemfile instead.
         postBuild = ''
           mkdir -p $out/nix-support
           cat > $out/nix-support/setup-hook <<EOF
+          export GEM_HOME="$out/${ruby.gemPath}"
           export GEM_PATH="$out/${ruby.gemPath}\''${GEM_PATH:+:\$GEM_PATH}"
           EOF
         '';
