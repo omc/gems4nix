@@ -790,10 +790,15 @@ let
     && assertEq "resolvePlatforms: git source survives resolution" result.errgonomic.source.type "git"
     && assertEq "resolvePlatforms: path source survives resolution" result.hello_gem.source.type "path";
 
-  # A git gem reached only through another gem's dependency list belongs to no
-  # Gemfile group, so the group filter drops it. expandTransitiveDeps is what
-  # brings it back; without that step the gem vanishes with no error and the
-  # failure surfaces as a LoadError at runtime.
+  # A git gem holding no group survives because something kept depends on it.
+  # Without expandTransitiveDeps the group filter drops it, with no error, and
+  # the failure surfaces as a LoadError at runtime.
+  #
+  # This is defensive rather than a fix for an observed failure. A git or path
+  # gem is only in the lockfile because the Gemfile declared its source, which
+  # makes it a top-level dependency, which gives it a group. The gem that
+  # actually arrives groupless is mini_portile2, covered below. The case here
+  # is a GIT section providing several gems where the Gemfile names a subset.
   test_transitive_git_gem_survives_group_filter =
     let
       allGems = [

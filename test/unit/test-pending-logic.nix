@@ -226,6 +226,34 @@ let
       slow, so it belongs beside the examples rather than in the unit suite.
     '';
 
+    no_end_to_end_groupless_git_gem = ''
+      COVERAGE GAP
+      Nothing builds a git or path gem that is reachable only through another
+      gem's dependency list. Both sources in examples/complex are named in the
+      Gemfile's default group, so the group filter would keep them with or
+      without expandTransitiveDeps. The property is covered at unit level, in
+      test-resolve-logic.nix, and never end to end through the real IFD.
+
+      WHY IT IS HARD, NOT JUST MISSING
+      Bundler writes a GIT or PATH section only for a source the Gemfile
+      declares, and a declared source is a top-level dependency, which
+      gem-groups.rb always gives a group. Measured against examples/complex:
+      errgonomic (git) and hello_gem (path) both come back ["default"], while
+      mini_portile2 comes back [] — and mini_portile2 is an ordinary GEM gem.
+      So the gem the expansion actually rescues is not a git gem at all.
+
+      The remaining way to reach the case is a GIT section providing several
+      gems where the Gemfile names a subset and a named one depends on an
+      unnamed sibling. A gem in no group that nothing depends on is correctly
+      dropped, so that is the whole scenario.
+
+      WHAT A FIXTURE WOULD NEED
+      A real git repository holding two gems, one depending on the other, with
+      a Gemfile naming only the first. Hand-editing a lockfile to fake the edge
+      does not work: `bundle lock` regenerates it and the fixture stops being
+      reproducible. That is a new repository, not a change to an example.
+    '';
+
     non_github_git_servers = ''
       LIMITATION
       gems4nix fetches a git gem by its locked revision alone. Some git servers
