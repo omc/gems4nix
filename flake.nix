@@ -69,6 +69,28 @@
             };
             groups = [ "default" ];
           };
+
+          # A git gem whose source is supplied rather than fetched, so this
+          # builds with no network. Two gems come from the one git remote,
+          # which is what a repository holding several gems looks like.
+          bundlerLayoutGems = gemfileEnv {
+            name = "bundler-layout-test";
+            gemfile = ./test/integration/bundler-layout/Gemfile;
+            gemfileLock = ./test/integration/bundler-layout/Gemfile.lock;
+            groups = [ "default" ];
+            platforms = [ "ruby" ];
+            gemGroups = {
+              widget = [ "default" ];
+              sprocket = [ "default" ];
+              gadget = [ "default" ];
+            };
+            gemSrcOverrides = {
+              widget = ./test/integration/bundler-layout/vendor/widget;
+              sprocket = ./test/integration/bundler-layout/vendor/sprocket;
+            };
+          };
+
+          bundlerLayoutGemPath = "${bundlerLayoutGems}/${pkgs.ruby.gemPath}";
         in
         {
           unit-resolve = nixEvalCheck "resolve" ./test/unit/test-resolve-logic.nix;
@@ -130,6 +152,23 @@
               inherit pkgs gemfileEnv;
             }) "PASS"
           );
+
+          # Measures what one git repository supplying two gems produces. Both
+          # gems write the same bundler/gems scope, which is what a real
+          # checkout of such a repository looks like.
+          bundler-git-repo-with-two-gems =
+            pkgs.runCommand "bundler-git-repo-with-two-gems" { }
+              ''
+                scope="${bundlerLayoutGemPath}/bundler/gems/widget-ruby-4f2e1c8a9b3d"
+                for entry in widget.gemspec sprocket.gemspec lib/widget.rb lib/sprocket.rb; do
+                  if [ ! -e "$scope/$entry" ]; then
+                    echo "the shared checkout is missing $entry:" >&2
+                    ls -R "$scope" >&2
+                    exit 1
+                  fi
+                done
+                touch $out
+              '';
 
           integration-platform-gems =
             pkgs.runCommand "integration-platform-gems"

@@ -1,4 +1,8 @@
 source 'https://rubygems.org'
 
-gem 'widget', git: 'https://git.example.com/acme/widget-ruby.git'
+git 'https://git.example.com/acme/widget-ruby.git' do
+  gem 'widget'
+  gem 'sprocket'
+end
+
 gem 'gadget', path: 'vendor/gadget'

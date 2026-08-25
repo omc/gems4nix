@@ -28,10 +28,15 @@ let
     platforms = [ "ruby" ];
     gemGroups = {
       widget = [ "default" ];
+      sprocket = [ "default" ];
       gadget = [ "default" ];
     };
-    # Any directory in the store will do: nothing is built here.
-    gemSrcOverrides.widget = ./vendor;
+    # The lockfile's git remote is fictional, so every git gem's source is
+    # supplied here and nothing reaches the network.
+    gemSrcOverrides = {
+      widget = ./vendor/widget;
+      sprocket = ./vendor/sprocket;
+    };
   };
 
   postInstallOf =

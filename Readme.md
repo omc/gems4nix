@@ -272,6 +272,8 @@ Two things have to be true at runtime, and the environment's setup hook handles 
 
 Because `GEM_HOME` is a read-only store path, `gem install` and `bundle install` into the environment fail. That is the point. Declare the gem in the `Gemfile` and rebuild.
 
+A single git repository supplying several gems works, and the gems share one checkout directory the way a real `bundle install` would leave them: each gem contributes its own gemspec and its own files to `bundler/gems/<repo>-<shortrev>`. Two such gems shipping the *same* file path is the one case that fails, and it fails during the environment build with `pkgs.buildEnv error: two given paths contain a conflicting subpath` followed by a hint about "two different versions of the same package". That hint is misleading here: the two paths are two different gems out of one repository, not two versions of one gem.
+
 A lockfile gems4nix cannot honour is an evaluation error rather than a gem missing from the environment: a hashless `CHECKSUMS` line no source claims, a `PLUGIN SOURCE` section, a `glob:` option, and any unrecognised key on a `GIT` or `PATH` section all throw and name what they found. Each has its own entry under [Common Errors and Solutions](#common-errors-and-solutions), with the message as thrown and what to do about it.
 
 

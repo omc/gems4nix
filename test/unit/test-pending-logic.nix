@@ -248,6 +248,17 @@ let
       a Gemfile naming only the first. Hand-editing a lockfile to fake the edge
       does not work: `bundle lock` regenerates it and the fixture stops being
       reproducible. That is a new repository, not a change to an example.
+
+      A GIT section supplying two gems is no longer the hard part.
+      test/integration/bundler-layout has one, offline, with gemSrcOverrides
+      standing in for the fetch, and measured against it the two gems share a
+      single bundler/gems/<repo>-<shortrev> directory: each contributes its own
+      gemspec and its own files, and buildEnv merges them, which is what a real
+      checkout of such a repository looks like. Two gems shipping the same file
+      path is the exception, and it fails the environment build with
+      `pkgs.buildEnv error: two given paths contain a conflicting subpath`.
+      What is still missing is the group edge, and that needs the real IFD
+      rather than the gemGroups override the fixture uses.
     '';
 
     non_github_git_servers = ''
