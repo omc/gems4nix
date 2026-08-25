@@ -484,5 +484,6 @@ map.
 - **A path gem must live inside the flake's source tree.** Its `remote:` resolves against `root`, and Nix can only copy a source it can see.
 - **Only GitHub git remotes have been tried.** A locked revision is often not a branch tip, and a server with `uploadpack.allowAnySHA1InWant` off refuses to send one on its own; gems4nix asks for every ref to work around that.
 - **Bundler >= 2.5 is required**, and its `CHECKSUMS` section has to be enabled explicitly with `bundle lock --add-checksums`.
-- **Group extraction uses Ruby IFD** by default. This is an impurity at Nix
-  evaluation time. Pass `gemGroups` to avoid it.
+- **Group extraction uses Ruby IFD** by default. This is an impurity at Nix evaluation time: evaluating a `gemfileEnv` runs Bundler in a derivation and reads its output back. Pass `gemGroups` to avoid it.
+
+  Reading the groups out of the lockfile instead is not possible. Bundler does not write them there: `Bundler::Dependency#to_lock` produces the same `DEPENDENCIES` line whatever groups a dependency has, and `Bundler::LockfileParser` reads every dependency back as `[:default]`. Groups live in the `Gemfile`, where arbitrary Ruby can produce them, so Bundler is what has to evaluate them.

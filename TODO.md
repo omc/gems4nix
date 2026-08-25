@@ -139,21 +139,14 @@ the less we maintain and the more we benefit from upstream fixes.
 
     Three limitations stand, all recorded in `test/unit/test-pending-logic.nix` under `nonTests`. A git gem's compiled extension is installed under a name Bundler does not look for (#10). A git gem with a native extension has no `gemPath` (#9). And `builtins.fetchGit` runs at evaluation time and is not cacheable, for which `gemSrcOverrides` is the escape hatch.
 
-14. **Partly done. The parsers exist; nothing calls them.**
+14. **Closed. Group membership is not in the lockfile, so the IFD cannot be retired this way.**
     The `specs:` half is wired: `parseDependencies` feeds the expansion in #12, and it reads every `specs:` block, GIT and PATH sections included, so a git gem's own dependencies survive the group filter too.
 
-    The `DEPENDENCIES` half is written and unit-tested but unreachable from the pipeline. `parseDependenciesSection` and `takeDependenciesSection` in `parse.nix` are exported and covered by `test/unit/test-parse-logic.nix`, and `parse-gemfile-and-lockfile.nix` calls neither. Retiring the IFD means calling them and propagating groups along the `specs:` edges in Nix.
+    The `DEPENDENCIES` half cannot do what this item asked of it. The claim it rested on — that "between the two sections, the entire dependency graph and group assignment is recoverable from the lockfile alone" — is wrong about groups, in both directions, measured against Bundler 2.7.2:
 
-    The rest of this item still stands. Between the two sections, the entire dependency graph and group assignment is recoverable from the lockfile alone, in pure Nix, without running Ruby.
+    - **Writing.** `Bundler::Dependency#to_lock` is the method that writes a `DEPENDENCIES` line. It appends the requirement and a `!` for a pinned source, and never consults `groups`. Three dependencies identical but for their groups (`[:test]`, `[:production, :development]`, `[:default]`) produce the same line, `"  rake"`.
+    - **Reading.** `Bundler::LockfileParser#parse_dependency` builds each dependency from a name and a version only. Run over `omc/sprout`'s real `Gemfile.lock`, whose `Gemfile` has five `group` blocks, it returns `[:default]` for all 112 dependencies — `debug`, `rubocop` and `annotaterb` included, every one of them declared in `:development` or `:test`.
 
-    Eliminating the `runCommand` that invokes `gem-groups.rb` would:
-    - Remove the Ruby/Bundler build-time dependency from evaluation
-    - Make the parser fully pure (no IFD)
-    - Speed up `nix eval` by avoiding a derivation build
-    - Make the entire pipeline testable without IO
+    Groups live in the `Gemfile`, where they can be written with arbitrary Ruby, and `gem-groups.rb` reads them through `Bundler.definition.dependencies`. Nothing in the lockfile records the answer, so no amount of pure Nix parsing recovers it. The IFD stays, and the way to avoid it stays the `gemGroups` argument.
 
-    **Action:** Parse the dependency tree from the `specs:` indentation
-    structure (4-space = gem, 6-space = dependency). Parse group membership
-    from the `DEPENDENCIES` section. Propagate groups through the dependency
-    edges in pure Nix. This is the single highest-leverage change for the
-    project's architecture.
+    `parseDependenciesSection` and `takeDependenciesSection` remain exported and unit-tested with no caller. They correctly parse what the section does hold — names, requirements and the pinned marker — which is what a `toGemset` (#11) would need. Nothing consumes them today, and that is a gap rather than a defect.

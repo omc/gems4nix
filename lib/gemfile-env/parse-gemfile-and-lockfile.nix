@@ -17,8 +17,14 @@
 # gemfileEnv with an explicit { gemName = [ "group1" "group2" ]; ... }
 # mapping. When gemGroups is non-null, gem-groups.rb is skipped entirely.
 #
-# A pure Nix Gemfile parser is a long-term aspiration but impractical for
-# general use given the arbitrary Ruby that real Gemfiles contain.
+# Reading the groups out of the lockfile instead is not an option that was
+# passed over; it is not there to read. Bundler's DEPENDENCIES writer,
+# Dependency#to_lock, never consults a dependency's groups, and its reader,
+# LockfileParser#parse_dependency, gives every dependency it builds the
+# default group. A lockfile from a Gemfile with five group blocks comes back
+# from Bundler's own parser as one group. So the answer only exists in the
+# Gemfile, where arbitrary Ruby can produce it, and Bundler is what evaluates
+# that.
 # ─────────────────────────────────────────────────────────────
 #
 # callPackage definitions:
