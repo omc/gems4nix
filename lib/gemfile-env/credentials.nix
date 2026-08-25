@@ -45,6 +45,26 @@ let
 
   shapeHint = "an entry is either { usernameVar = \"...\"; passwordVar = \"...\"; } or { netrcFile = \"/run/secrets/...\"; }";
 
+  # A netrc entry is one line and `machine` is the only thing that starts one,
+  # so any newline that reaches the file forges an entry for another host. The
+  # host and the two variable names are known while Nix evaluates, so they are
+  # refused here. The variables' values are not known until the build, and are
+  # guarded in the phase that writes them.
+  #
+  # A netrcFile's contents are exempt by nature: that file is a netrc, so it is
+  # many lines and several machine entries on purpose.
+  forgesNetrcLine = value: builtins.match ".*[\n\r].*" value != null;
+
+  # An environment variable name that is not a shell identifier cannot be
+  # exported under that name, so it is a typo or an attempt to break out of the
+  # `''${VAR}` the netrc line interpolates it into.
+  isShellIdentifier = name: builtins.match "[a-zA-Z_][a-zA-Z0-9_]*" name != null;
+
+  # The path is interpolated into a double-quoted shell word. Inside those, the
+  # shell still acts on `$`, a backtick and a backslash, and a `\"` ends the
+  # word outright, so any of them reads a different file or runs something.
+  shellUnsafePath = path: builtins.match ".*[\n\r\"$`\\].*" path != null;
+
   # Which mode an entry declares. Used by netrcFetchAttrs to dispatch, and by
   # validateCredentials to reject a half-specified or mixed entry.
   credentialMode = entry: if entry ? netrcFile then "file" else "env";
@@ -61,8 +81,13 @@ let
           unknown = builtins.filter (n: !(builtins.elem n credentialAttrNames)) declared;
           envAttrs = builtins.filter (n: builtins.elem n envVarAttrNames) declared;
           missingEnv = builtins.filter (n: !(entry ? ${n})) envVarAttrNames;
+          badVarNames = builtins.filter (
+            n: entry ? ${n} && !(builtins.isString entry.${n} && isShellIdentifier entry.${n})
+          ) envVarAttrNames;
         in
-        if lib.strings.hasInfix "/" host then
+        if forgesNetrcLine host then
+          throw "gems4nix: a credentials key contains a newline, which would forge a second netrc entry; use a bare host"
+        else if lib.strings.hasInfix "/" host then
           throw "gems4nix: credentials key '${host}' looks like a URL; use a bare host, e.g. '${hostOf host}'"
         else if unknown != [ ] then
           throw "gems4nix: credentials.\"${host}\" has unrecognized attribute(s) ${lib.concatStringsSep ", " unknown}; ${shapeHint}"
@@ -76,6 +101,10 @@ let
           throw "gems4nix: credentials.\"${host}\".netrcFile must be a string, not a Nix path; a path literal would copy the secret into the store"
         else if entry ? netrcFile && !(lib.strings.hasPrefix "/" entry.netrcFile) then
           throw "gems4nix: credentials.\"${host}\".netrcFile must be an absolute path, but got '${entry.netrcFile}'"
+        else if entry ? netrcFile && shellUnsafePath entry.netrcFile then
+          throw "gems4nix: credentials.\"${host}\".netrcFile contains a newline, a quote, a backslash, a backtick or a '$'. The path is read by a shell, so such a character makes it read a different file or run a command."
+        else if badVarNames != [ ] then
+          throw "gems4nix: credentials.\"${host}\".${builtins.head badVarNames} must name an environment variable, so it has to be a shell identifier such as GEM_REGISTRY_TOKEN. A value that is not one cannot be exported, and a newline in it would forge a second netrc entry."
         else
           entry;
     in
@@ -147,6 +176,21 @@ let
       ${wrongLayerNote}
       exit 1
     }
+
+    # A netrc entry is one line. A value carrying a newline would write the
+    # rest of itself as further lines, and `machine` is all it takes to claim
+    # another host. Neither Nix nor the heredoc can see this one: the value
+    # arrives from the environment while the build runs.
+    gems4nixRejectNewline() {
+      if [ "$(printf '%s' "$3" | wc -l)" -ne 0 ]; then
+        echo >&2 "gems4nix: the value of \$$2, the credential for $1, contains a newline."
+        echo >&2 "  A netrc entry is a single line, so writing this value would add"
+        echo >&2 "  lines of its own to the netrc and could claim another host."
+        echo >&2 "  Check how the secret is stored: a trailing newline from a file"
+        echo >&2 "  read into the variable is the usual cause."
+        exit 1
+      fi
+    }
   '';
 
   # Mode 1: read the credential out of the build environment.
@@ -163,6 +207,8 @@ let
     ''
       [ -n "''${${usernameVar}:-}" ] || gems4nixMissingCredential ${host} ${usernameVar} ${usernameVar} ${passwordVar}
       [ -n "''${${passwordVar}:-}" ] || gems4nixMissingCredential ${host} ${passwordVar} ${usernameVar} ${passwordVar}
+      gems4nixRejectNewline ${host} ${usernameVar} "''${${usernameVar}}"
+      gems4nixRejectNewline ${host} ${passwordVar} "''${${passwordVar}}"
 
       cat >> netrc <<EOF
       machine ${host} login ''${${usernameVar}} password ''${${passwordVar}}

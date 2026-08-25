@@ -239,6 +239,72 @@ let
       (lib.strings.hasInfix "extra-sandbox-paths = /run/secrets/gem-registry-netrc" attrs.netrcPhase)
       true;
 
+  # ── validateCredentials: values that could forge a netrc entry ─
+
+  # A netrc entry is one line, so a newline anywhere that reaches the file
+  # writes a second `machine` line. The host and the variable names are known
+  # while Nix evaluates, so they are refused here; the variables' values are
+  # not, and are guarded in the phase itself.
+  test_validate_rejects_a_newline_in_the_host =
+    assertThrows "a newline in a credentials key is refused"
+      (validateCredentials {
+        "gems.example.com\nmachine evil.example login e password e" = {
+          usernameVar = "U";
+          passwordVar = "P";
+        };
+      });
+
+  test_validate_rejects_a_newline_in_a_variable_name =
+    assertThrows "a newline in usernameVar is refused" (validateCredentials {
+      "gems.example.com" = {
+        usernameVar = "U}\nmachine evil.example login e password e\n#{";
+        passwordVar = "P";
+      };
+    })
+    && assertThrows "a newline in passwordVar is refused" (validateCredentials {
+      "gems.example.com" = {
+        usernameVar = "U";
+        passwordVar = "P}\nmachine evil.example login e password e\n#{";
+      };
+    });
+
+  # An environment variable name that is not a shell identifier cannot be
+  # exported, so it can only ever be a typo or an injection.
+  test_validate_requires_identifier_variable_names =
+    assertThrows "a variable name that is not a shell identifier is refused" (validateCredentials {
+      "gems.example.com" = {
+        usernameVar = "not-an-identifier";
+        passwordVar = "P";
+      };
+    })
+    && assertThrows "a variable name starting with a digit is refused" (validateCredentials {
+      "gems.example.com" = {
+        usernameVar = "1USER";
+        passwordVar = "P";
+      };
+    });
+
+  test_validate_accepts_ordinary_variable_names =
+    assertEq "an ordinary SCREAMING_SNAKE variable name is accepted" (validateCredentials githubCreds)
+      githubCreds;
+
+  # The path is interpolated into a double-quoted shell word, so a character
+  # the shell acts on either reads a different file or runs something.
+  test_validate_rejects_shell_metacharacters_in_netrcFile =
+    assertThrows "a newline in netrcFile is refused" (validateCredentials {
+      "gems.example.com".netrcFile = "/run/secrets/a\nrm -rf /";
+    })
+    && assertThrows "a command substitution in netrcFile is refused" (validateCredentials {
+      "gems.example.com".netrcFile = "/run/secrets/$(id)/netrc";
+    })
+    && assertThrows "a double quote in netrcFile is refused" (validateCredentials {
+      "gems.example.com".netrcFile = "/run/secrets/\"; id; \"/netrc";
+    });
+
+  test_validate_accepts_an_ordinary_netrc_path =
+    assertEq "an ordinary absolute path is accepted" (validateCredentials fileCreds)
+      fileCreds;
+
   # ── credentialsFor ─────────────────────────────────────────────
 
   test_credentialsFor_match =
@@ -405,6 +471,12 @@ let
     && test_netrcFile_error_names_traversal
     && test_netrcFile_error_names_sandbox_paths
     # credentialsFor
+    && test_validate_rejects_a_newline_in_the_host
+    && test_validate_rejects_a_newline_in_a_variable_name
+    && test_validate_requires_identifier_variable_names
+    && test_validate_accepts_ordinary_variable_names
+    && test_validate_rejects_shell_metacharacters_in_netrcFile
+    && test_validate_accepts_an_ordinary_netrc_path
     && test_credentialsFor_match
     && test_credentialsFor_no_match
     && test_credentialsFor_empty_credentials
