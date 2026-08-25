@@ -46,6 +46,8 @@
 
    Still by hand: the `examples/` flakes, each of which has its own `nix flake check`. CI is `x86_64-linux` only.
 
+   No test gates this one, and none can: what CI runs is evidence produced by a run, not an assertion the suite can make about itself. The ten checks it executes are `unit-parse`, `unit-resolve`, `unit-pipeline`, `unit-credentials`, `unit-arguments`, `credentials-wiring`, `arguments-strictness`, `ruby-override-wiring`, `integration-platform-gems` and `integration-gemspec-directive`.
+
 7. **Open. `gem-groups.rb` group propagation may over-propagate.**
    The Ruby script iterates all specs and propagates groups through
    descendants, but it does this for every spec regardless of whether that
@@ -123,6 +125,8 @@ the less we maintain and the more we benefit from upstream fixes.
 
 12. **Done. Transitive dependency expansion is wired into the pipeline.**
     `parseDependencies` reads the indented dependency lines under each gem in the `specs:` section into a `{ gemName = [ deps ]; }` graph, and `expandTransitiveDeps` closes the group-filtered set over it. `gem-groups.rb` is still what assigns groups; the expansion is what stops a missed transitive dep from being silently dropped, which is the failure in #5.
+
+    Gated in `test/unit/test-parse-logic.nix` by `test_parseDependencies_nokogiri`, `test_parseDependencies_multiple_gems`, `test_parseDependencies_platform_variants_merge`, `test_parseDependencies_no_deps` and `test_parseDependencies_multi_segment_platform`, and in `test/unit/test-resolve-logic.nix` by `test_expandTransitiveDeps_basic`, `test_expandTransitiveDeps_transitive_chain`, `test_expandTransitiveDeps_no_deps`, `test_expandTransitiveDeps_circular`, `test_expandTransitiveDeps_unknown_dep_not_added` and `test_expandTransitiveDeps_empty_initial`. The two halves meeting is what `test_ruby_only_nokogiri_keeps_build_deps` in #5 asserts.
 
     Dropping the Ruby `runCommand` entirely is a separate change, tracked in #14.
 
