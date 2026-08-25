@@ -77,6 +77,13 @@
           unit-credentials = nixEvalCheck "credentials" ./test/unit/test-credentials-logic.nix;
           unit-arguments = nixEvalCheck "arguments" ./test/unit/test-arguments-logic.nix;
 
+          # The pending ledger asserts that each known limitation is still a
+          # limitation. It takes `.ledger` rather than the whole file, because
+          # the pending tests themselves are expected to throw.
+          unit-pending = pkgs.writeText "unit-pending" (
+            builtins.deepSeq (import ./test/unit/test-pending-logic.nix { lib = pkgs.lib; }).ledger "PASS"
+          );
+
           # Asserts credential plumbing on derivation attributes only; no fetch.
           credentials-wiring = pkgs.writeText "credentials-wiring" (
             builtins.deepSeq (import ./test/integration/credentials/wiring.nix {
