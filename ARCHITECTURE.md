@@ -16,7 +16,10 @@ flowchart TD
 ## Key Design Decisions
 
 1. Parse the lockfile in pure Nix (no bundix, no gemset.nix). Group extraction
-   uses a Ruby IFD because Gemfile semantics are Bundler's domain.
+   uses a Ruby IFD because groups are not in the lockfile to read: Bundler's
+   `Dependency#to_lock` never writes them and its `LockfileParser` reads every
+   dependency back as `[:default]`. They live in the Gemfile, where arbitrary
+   Ruby can produce them, so Bundler is what evaluates them.
 2. Prefer precompiled native gems over source compilation.
 3. Only apply gemConfig overrides to ruby-platform gems (precompiled gems
    should not need source build patches).
@@ -26,7 +29,12 @@ flowchart TD
    secret reaches curl through a netrc in the build directory and never through
    the store. `buildRubyGem` builds its `src` from `source.remotes` and
    `source.sha256` alone, so a gem on a credentialed remote gets a `src` we
-   construct instead.
+   construct instead. One netrc covers every credentialed remote of a gem,
+   because `fetchurl` falls through to the next url on failure and a fallback
+   with no credential is a bare 401. Since a netrc entry is one line, anything
+   that could forge a second one is refused: the host, the variable names and
+   the `netrcFile` path while Nix evaluates, and the variables' values in the
+   build, which is the only place they exist.
 6. `gemfileEnv` rejects an argument it does not declare. A consumer pinned to a
    version predating a feature has to learn that at the call site; the
    alternative is a successful evaluation that ignores the argument and fails
@@ -37,9 +45,11 @@ flowchart TD
    file RubyGems reads to find a gem on `GEM_PATH`, and `type = "git"` also
    wants a `sha256` that a `Gemfile.lock` does not record.
 8. A lockfile gems4nix cannot honour is an evaluation error, never a gem
-   quietly missing from the environment. A hashless `CHECKSUMS` line no source
-   claims, a `PLUGIN SOURCE` section, a `glob:` option and an unrecognised key
-   on a source section all throw. A dropped gem turns into a `LoadError` much
+   quietly missing from the environment or fetched from somewhere the lockfile
+   did not say. A hashless `CHECKSUMS` line no source claims, a `PLUGIN SOURCE`
+   section, a `glob:` option, an unrecognised key on a source section, a gem
+   two `GEM` sections both claim, and a hashed `CHECKSUMS` line no `GEM`
+   section provides all throw. A dropped gem turns into a `LoadError` much
    later, in a layer that is not at fault.
 9. Stay unopinionated about where that secret comes from. A consumer names
    either a file path (`netrcFile`, needing no daemon configuration) or two
@@ -51,6 +61,18 @@ flowchart TD
     setup hook exports `GEM_HOME` so Bundler looks there. Both views rather
     than one: moving the gem to satisfy Bundler would break the plain
     `require` that a consumer who never boots through Bundler relies on.
+11. A `GEM` section's gems are its four-space spec lines, and its remotes are
+    every `remote:` line it carries, reversed. Bundler looks up the
+    last-declared source first and writes the lockfile first-declared first, so
+    the reversal is what makes our list equal its own `remotes` and the fetch
+    try the highest-priority remote first. A six-space line names a dependency
+    another section may provide, so counting it as a gem here would claim this
+    section's remote for a gem that is not on it.
+12. A `RUBY VERSION` the lockfile and the `ruby` argument disagree on throws
+    across the ABI and warns below it. Gems install under
+    `lib/ruby/gems/<major>.<minor>.0`, so a difference there is every gem; below
+    it, the requirement Bundler enforces is the Gemfile's rather than this
+    value, which records only which Ruby resolution happened to run on.
 
 ## What We Use from Nixpkgs
 
@@ -74,6 +96,11 @@ lib/gemfile-env/
   parse-gemfile-and-lockfile.nix  IO shell: readFile, runCommand, calls parse.nix.
   gem-configs.nix                 Local per-gem build overrides.
   gem-groups.rb                   Ruby IFD script for Gemfile group extraction.
+
+scripts/
+  bundler-remote-order.rb         Measures how Bundler writes and reads a GEM
+                                  section's remote order. Gated by the
+                                  bundler-remote-order check.
 
 test/
   helpers.nix                     Shared assertEq, assertThrows, fixtures.

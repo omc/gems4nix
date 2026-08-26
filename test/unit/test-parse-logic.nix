@@ -24,6 +24,9 @@ let
     parseDependencies
     parseDependenciesSection
     takeDependenciesSection
+    parseRubyVersion
+    rubyAbi
+    rubyVersionVerdict
     parseLockfile
     indexRemotes
     mergeGemMetadata
@@ -193,7 +196,9 @@ let
         "    zeitwerk (2.7.2)"
       ];
     in
-    assertEq "parseGemSection: remote (trailing slash stripped)" result.remote "https://rubygems.org"
+    assertEq "parseGemSection: remote (trailing slash stripped)" result.remotes [
+      "https://rubygems.org"
+    ]
     && assertEq "parseGemSection: gems list" result.gems [
       "abbrev"
       "zeitwerk"
@@ -207,11 +212,30 @@ let
         "    depot (1.4.0)"
       ];
     in
-    assertEq "parseGemSection: remote without trailing slash" result.remote
+    assertEq "parseGemSection: remote without trailing slash" result.remotes [
       "https://rubygems.pkg.github.com/omc"
+    ]
     && assertEq "parseGemSection: gems from private remote" result.gems [ "depot" ];
 
-  test_parseGemSection_deps_included =
+  # Bundler writes one `remote:` line per remote of a single source, in the
+  # order the Gemfile declared them, and looks them up in the opposite order.
+  # The list has to come out in lookup order, so it is the reverse of the file.
+  test_parseGemSection_multiple_remotes =
+    let
+      result = parseGemSection [
+        "  remote: https://rubygems.org/"
+        "  remote: https://private.example.com/"
+        "  specs:"
+        "    rake (13.0.6)"
+      ];
+    in
+    assertEq "parseGemSection: every remote survives, in Bundler's lookup order" result.remotes [
+      "https://private.example.com"
+      "https://rubygems.org"
+    ]
+    && assertEq "parseGemSection: a second remote line is not a gem" result.gems [ "rake" ];
+
+  test_parseGemSection_deps_excluded =
     let
       result = parseGemSection [
         "  remote: https://rubygems.org/"
@@ -222,13 +246,47 @@ let
         "    zeitwerk (2.7.2)"
       ];
     in
-    # dependency lines are included; parseGemSection does not distinguish indent levels.
-    assertEq "parseGemSection: dependency lines included (current behavior)" result.gems [
+    # A 6-space line names a dependency of the gem above it. Counting it as a
+    # gem of this section claims a remote for a gem another section provides.
+    assertEq "parseGemSection: a dependency line is not a gem of this section" result.gems [
       "actioncable"
-      "actionpack"
-      "activesupport"
       "zeitwerk"
     ];
+
+  # One gem, one remote, however many platform variants it was locked for.
+  test_parseGemSection_platform_variants_collapse =
+    let
+      result = parseGemSection [
+        "  remote: https://rubygems.org/"
+        "  specs:"
+        "    nokogiri (1.18.0)"
+        "    nokogiri (1.18.0-arm64-darwin)"
+        "    nokogiri (1.18.0-x86_64-linux-gnu)"
+      ];
+    in
+    assertEq "parseGemSection: platform variants are one gem" result.gems [ "nokogiri" ];
+
+  test_parseGemSection_missing_remote_throws =
+    assertThrows "parseGemSection: a GEM section with no remote throws"
+      (parseGemSection [
+        "  specs:"
+        "    rake (13.0.6)"
+      ]);
+
+  test_parseGemSection_missing_specs_throws =
+    assertThrows "parseGemSection: a GEM section with no specs line throws"
+      (parseGemSection [
+        "  remote: https://rubygems.org/"
+      ]);
+
+  test_parseGemSection_unknown_key_throws =
+    assertThrows "parseGemSection: an unrecognised option on a GEM section throws"
+      (parseGemSection [
+        "  remote: https://rubygems.org/"
+        "  revision: f06314af89209f855019219fd198513855be0fd5"
+        "  specs:"
+        "    rake (13.0.6)"
+      ]);
 
   # ── parseLockfile ─────────────────────────────────────
 
@@ -259,9 +317,9 @@ let
       assertEq "parseLockfile: first checksum gemName" (builtins.elemAt result.checksumSection 0).gemName
         "rake"
     && assertEq "parseLockfile: gemSections length" (builtins.length result.gemSections) 1
-    &&
-      assertEq "parseLockfile: first section remote" (builtins.elemAt result.gemSections 0).remote
-        "https://rubygems.org";
+    && assertEq "parseLockfile: first section remote" (builtins.elemAt result.gemSections 0).remotes [
+      "https://rubygems.org"
+    ];
 
   test_parseLockfile_missing_checksums = assertThrows "parseLockfile: missing CHECKSUMS throws" (parseLockfile ''
     GEM
@@ -369,45 +427,162 @@ let
       assertEq "parseLockfile: surviving gem is rake" (builtins.elemAt result.checksumSection 0).gemName
         "rake";
 
+  # ── RUBY VERSION ─────────────────────────────────────────────
+
+  rubyVersionLockfile = version: ''
+    GEM
+      remote: https://rubygems.org/
+      specs:
+        rake (13.0.6)
+
+    CHECKSUMS
+      rake (13.0.6) sha256=aaaa
+
+    RUBY VERSION
+    ${version}
+
+    BUNDLED WITH
+       2.7.2
+  '';
+
+  test_parseLockfile_reads_the_ruby_version =
+    assertEq "parseLockfile: the locked ruby version, past its three-space indent"
+      (parseLockfile (rubyVersionLockfile "   ruby 3.4.9")).rubyVersion
+      "3.4.9";
+
+  # examples/complex records this shape.
+  test_parseRubyVersion_drops_the_patchlevel =
+    assertEq "parseRubyVersion: a patchlevel is not part of the version"
+      (parseRubyVersion [
+        "RUBY VERSION"
+        "   ruby 3.3.10p183"
+        ""
+      ])
+      "3.3.10";
+
+  test_parseRubyVersion_absent_is_null =
+    assertEq "parseRubyVersion: a lockfile with no RUBY VERSION section is not an error"
+      (parseRubyVersion [
+        "GEM"
+        "  remote: https://rubygems.org/"
+        ""
+      ])
+      null;
+
+  # JRuby writes `ruby 3.1.4 (jruby 9.4.5.0)`. Reading the 3.1.4 out of it
+  # would claim a match gems4nix cannot deliver.
+  test_parseRubyVersion_unreadable_throws =
+    assertThrows "parseRubyVersion: a value in an unrecognised shape throws"
+      (parseRubyVersion [
+        "RUBY VERSION"
+        "   ruby 3.1.4 (jruby 9.4.5.0)"
+        ""
+      ]);
+
+  test_rubyAbi =
+    assertEq "rubyAbi: major and minor only" (rubyAbi "3.3.10") "3.3"
+    && assertEq "rubyAbi: a two-part version is its own abi" (rubyAbi "3.4") "3.4";
+
+  test_rubyVersionVerdict_agreement =
+    assertEq "rubyVersionVerdict: the same version is no verdict" (rubyVersionVerdict {
+      locked = "3.4.9";
+      actual = "3.4.9";
+    }) null
+    && assertEq "rubyVersionVerdict: a lockfile naming no ruby is no verdict" (rubyVersionVerdict {
+      locked = null;
+      actual = "3.4.9";
+    }) null;
+
+  test_rubyVersionVerdict_abi_difference_is_an_error =
+    let
+      verdict = rubyVersionVerdict {
+        locked = "3.4.9";
+        actual = "3.3.5";
+      };
+    in
+    assertEq "rubyVersionVerdict: a different abi is an error" verdict.level "error"
+    &&
+      assertEq "rubyVersionVerdict: the error names the locked version"
+        (lib.strings.hasInfix "Ruby 3.4.9" verdict.message)
+        true
+    &&
+      assertEq "rubyVersionVerdict: the error names the version built with"
+        (lib.strings.hasInfix "Ruby 3.3.5" verdict.message)
+        true;
+
+  # examples/complex locks 3.3.10 and builds against nixpkgs 24.11's 3.3.5.
+  # Bundler enforces the Gemfile's `ruby '~> 3.3'`, which both satisfy.
+  test_rubyVersionVerdict_teeny_difference_is_a_warning =
+    let
+      verdict = rubyVersionVerdict {
+        locked = "3.3.10";
+        actual = "3.3.5";
+      };
+    in
+    assertEq "rubyVersionVerdict: a shared abi is a warning" verdict.level "warning"
+    &&
+      assertEq "rubyVersionVerdict: the warning names the locked version"
+        (lib.strings.hasInfix "Ruby 3.3.10" verdict.message)
+        true
+    &&
+      assertEq "rubyVersionVerdict: the warning names the version built with"
+        (lib.strings.hasInfix "Ruby 3.3.5" verdict.message)
+        true;
+
   # ── indexRemotes ──────────────────────────────────────────
 
   test_indexRemotes =
     let
       sections = [
         {
-          remote = "https://rubygems.org";
+          remotes = [ "https://rubygems.org" ];
           gems = [
             "rake"
             "zeitwerk"
           ];
         }
         {
-          remote = "https://private.example.com";
+          remotes = [ "https://private.example.com" ];
           gems = [ "mygem" ];
         }
       ];
       result = indexRemotes sections;
     in
-    assertEq "indexRemotes: rake" result.rake "https://rubygems.org"
-    && assertEq "indexRemotes: zeitwerk" result.zeitwerk "https://rubygems.org"
-    && assertEq "indexRemotes: mygem" result.mygem "https://private.example.com";
+    assertEq "indexRemotes: rake" result.rake [ "https://rubygems.org" ]
+    && assertEq "indexRemotes: zeitwerk" result.zeitwerk [ "https://rubygems.org" ]
+    && assertEq "indexRemotes: mygem" result.mygem [ "https://private.example.com" ];
 
-  test_indexRemotes_first_writer_wins =
+  # A section's whole remote list belongs to each of its gems: any of them may
+  # serve it, and fetchurl tries them in the order indexRemotes hands over.
+  test_indexRemotes_carries_every_remote =
     let
-      sections = [
+      result = indexRemotes [
         {
-          remote = "https://rubygems.org";
-          gems = [ "faraday" ];
-        }
-        {
-          remote = "https://private.example.com";
-          gems = [ "faraday" ];
+          remotes = [
+            "https://private.example.com"
+            "https://rubygems.org"
+          ];
+          gems = [ "rake" ];
         }
       ];
-      result = indexRemotes sections;
     in
-    # builtins.listToAttrs keeps the first occurrence when names collide
-    assertEq "indexRemotes: duplicate gem uses first remote" result.faraday "https://rubygems.org";
+    assertEq "indexRemotes: a multi-remote section gives its gems both remotes" result.rake [
+      "https://private.example.com"
+      "https://rubygems.org"
+    ];
+
+  test_indexRemotes_duplicate_gem_throws =
+    assertThrows "indexRemotes: one gem claimed by two GEM sections throws"
+      (indexRemotes [
+        {
+          remotes = [ "https://rubygems.org" ];
+          gems = [ "faraday" ];
+        }
+        {
+          remotes = [ "https://private.example.com" ];
+          gems = [ "faraday" ];
+        }
+      ]);
 
   # ── mergeGemMetadata ─────────────────────────────────────────
 
@@ -433,8 +608,8 @@ let
           }
         ];
         gemRemotes = {
-          rake = "https://rubygems.org";
-          ffi = "https://rubygems.org";
+          rake = [ "https://rubygems.org" ];
+          ffi = [ "https://rubygems.org" ];
         };
         gemGroups = {
           rake = [ "default" ];
@@ -456,6 +631,26 @@ let
       "development"
     ];
 
+  # A checksum names a gem that must have come from somewhere. If no GEM
+  # section provides it and no GIT or PATH section claims it either, we have
+  # nowhere to fetch it from, and `attribute missing` says none of that.
+  test_mergeGemMetadata_unsourced_checksum_throws =
+    assertThrows "mergeGemMetadata: a checksum no GEM section provides throws"
+      (mergeGemMetadata {
+        checksumSection = [
+          {
+            gemName = "rake";
+            version = "13.0.6";
+            platform = "ruby";
+            source = {
+              sha256 = "aaaa";
+            };
+          }
+        ];
+        gemRemotes = { };
+        gemGroups = { };
+      });
+
   test_mergeGemMetadata_missing_group_defaults_empty =
     let
       result = mergeGemMetadata {
@@ -470,7 +665,7 @@ let
           }
         ];
         gemRemotes = {
-          mini_portile2 = "https://rubygems.org";
+          mini_portile2 = [ "https://rubygems.org" ];
         };
         gemGroups = { }; # mini_portile2 not in groups (build-time dep)
       };
@@ -961,19 +1156,23 @@ let
 
   test_parseSectionBody_duplicate_key_throws =
     assertThrows "parseSectionBody: repeated option key throws rather than silently overwriting"
-      (parseSectionBody [
-        "  remote: https://a.example.com"
-        "  remote: https://b.example.com"
-        "  specs:"
-      ]);
+      (parseSectionBody {
+        lines = [
+          "  remote: https://a.example.com"
+          "  remote: https://b.example.com"
+          "  specs:"
+        ];
+      });
 
   test_parseSectionBody_unparseable_option_throws =
     assertThrows "parseSectionBody: a line that is not '  key: value' throws"
-      (parseSectionBody [
-        "  remote: https://a.example.com"
-        "not-indented"
-        "  specs:"
-      ]);
+      (parseSectionBody {
+        lines = [
+          "  remote: https://a.example.com"
+          "not-indented"
+          "  specs:"
+        ];
+      });
 
   # ── parseLockfile: GIT and PATH sections ─────────────────────
 
@@ -1019,9 +1218,9 @@ let
       rake (13.0.6) sha256=aaaa
   '');
 
-  # GIT and PATH sections must never reach indexRemotes. It keeps the first
-  # remote it sees for a gem, and Bundler writes those sections before GEM
-  # ones, so a leak replaces a gem's real rubygems.org remote.
+  # GIT and PATH sections must never reach indexRemotes. A gem two sections
+  # both claim is refused, and a git gem leaking in would collide with the GEM
+  # section that really provides it.
   test_indexRemotes_excludes_git_path =
     let
       result = indexRemotes (parseLockfile gitPathLockfile).gemSections;
@@ -1029,7 +1228,7 @@ let
     assertEq "indexRemotes: git gem absent" (result ? errgonomic) false
     && assertEq "indexRemotes: path gem absent" (result ? hello_gem) false
     && assertEq "indexRemotes: git dependency line absent" (result ? "concurrent-ruby") false
-    && assertEq "indexRemotes: real GEM gem present" result.rake "https://rubygems.org";
+    && assertEq "indexRemotes: real GEM gem present" result.rake [ "https://rubygems.org" ];
 
   # ── mergeGemMetadata: git and path sources ───────────────────
 
@@ -1078,7 +1277,7 @@ let
           }
         ];
         gemRemotes = {
-          rake = "https://rubygems.org";
+          rake = [ "https://rubygems.org" ];
         };
         gemGroups = {
           rake = [ "default" ];
@@ -1157,7 +1356,7 @@ let
           }
         ];
         gemRemotes = {
-          errgonomic = "https://rubygems.org";
+          errgonomic = [ "https://rubygems.org" ];
         };
         gemGroups = {
           errgonomic = [ "default" ];
@@ -1214,7 +1413,7 @@ let
           }
         ];
         gemRemotes = {
-          rake = "https://rubygems.org";
+          rake = [ "https://rubygems.org" ];
         };
         gemGroups = {
           rake = [ "default" ];
@@ -1271,7 +1470,12 @@ let
     # parseGemSection
     && test_parseGemSection_basic
     && test_parseGemSection_no_trailing_slash
-    && test_parseGemSection_deps_included
+    && test_parseGemSection_multiple_remotes
+    && test_parseGemSection_deps_excluded
+    && test_parseGemSection_platform_variants_collapse
+    && test_parseGemSection_missing_remote_throws
+    && test_parseGemSection_missing_specs_throws
+    && test_parseGemSection_unknown_key_throws
     # parseLockfile
     && test_parseLockfile
     && test_parseLockfile_missing_checksums
@@ -1285,11 +1489,22 @@ let
     && test_parseLockfile_unexplained_hashless_throws
     && test_parseLockfile_plugin_source_throws
     # indexRemotes
+    # RUBY VERSION
+    && test_parseLockfile_reads_the_ruby_version
+    && test_parseRubyVersion_drops_the_patchlevel
+    && test_parseRubyVersion_absent_is_null
+    && test_parseRubyVersion_unreadable_throws
+    && test_rubyAbi
+    && test_rubyVersionVerdict_agreement
+    && test_rubyVersionVerdict_abi_difference_is_an_error
+    && test_rubyVersionVerdict_teeny_difference_is_a_warning
     && test_indexRemotes
-    && test_indexRemotes_first_writer_wins
+    && test_indexRemotes_carries_every_remote
+    && test_indexRemotes_duplicate_gem_throws
     && test_indexRemotes_excludes_git_path
     # mergeGemMetadata
     && test_mergeGemMetadata
+    && test_mergeGemMetadata_unsourced_checksum_throws
     && test_mergeGemMetadata_missing_group_defaults_empty
     # mergeGemMetadata: git and path sources
     && test_mergeGemMetadata_git_and_path

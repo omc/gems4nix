@@ -16,12 +16,14 @@
    section iterates ~1000 lines. This isn't a correctness bug but is worth
    noting for very large lockfiles.
 
-3. **Open. `indexRemotes` is first-writer-wins for duplicate gem names.**
-   `builtins.listToAttrs` on a flattened list means if the same gem name
-   appears in multiple GEM sections (e.g., `faraday` from both rubygems.org
-   and a private registry), only the first section's remote survives. The TODO
-   in `parse.nix` acknowledges this, but the current behavior is
-   silently arbitrary rather than loudly wrong.
+3. **Done. A gem carries every remote its GEM section declares, and a contested gem is refused.**
+   `parseGemSection` reads a section by indent depth: every `  remote:` line is a remote of that section, and only the four-space lines under `specs:` are its gems. Bundler writes several `remote:` lines into one section when a Gemfile declares more than one global source, and looks the last-declared one up first — while writing the file first-declared first, because `Source::Rubygems#add_remote` unshifts and `#to_lock` reverses that back. The list is therefore the reverse of the file, which makes it equal to Bundler's own `remotes`, and `fetchurl` tries the urls in that order. Measured by `scripts/bundler-remote-order.rb` on Bundler 2.5.22, 2.6.6, 2.6.9 and 2.7.2: every one writes `remote: A` then `remote: B` for a Gemfile declaring A then B, and reparses that file back to `["B", "A"]`. The two that matter are the two the consumers lock — 2.6.9 for `cio`, `errgonomic`, `intrinsic-rails`, `opportunities` and `team-core`, and 2.7.2 for `sprout`. The check `bundler-remote-order` runs the same script against whichever Bundler nixpkgs supplies, so a release that changed the ordering would turn `nix flake check` red rather than being noticed by a reader.
+
+   The six-space dependency lines used to count as gems, which claimed the section's remote for gems another section provides. Measured against `omc/sprout`: its private `depot` section lists `faraday` and six other rubygems.org gems as dependencies, and each of them claimed `rubygems.pkg.github.com`. Nothing broke only because `builtins.listToAttrs` kept the earlier rubygems.org entry — an accident of the order Bundler happened to write the two sections in.
+
+   A gem that two `GEM` sections both claim is now an evaluation error. Bundler locks a resolved gem under the single source that resolved it, so no lockfile it writes has one. Meeting the same ambiguity during resolution, `Bundler::SourceMap#all_requirements` asks the user to name the source in the Gemfile, and raises `SecurityError` under `bundler_4_mode`; under legacy Bundler it warns and takes the first source it saw. Refusing rather than copying that legacy fallback: gems4nix has no `Gemfile` in hand to warn about and no resolution to continue, so the first-seen source would be a silent choice made by section order.
+
+   Gated in `test/unit/test-parse-logic.nix` by `test_parseGemSection_multiple_remotes`, `test_parseGemSection_deps_excluded`, `test_parseGemSection_platform_variants_collapse`, `test_parseGemSection_missing_remote_throws`, `test_parseGemSection_missing_specs_throws`, `test_parseGemSection_unknown_key_throws`, `test_indexRemotes_carries_every_remote` and `test_indexRemotes_duplicate_gem_throws`.
 
 4. **Done. GIT and PATH sections are parsed and built.**
    `parseGitSection` and `parsePathSection` read the two source section types by indent depth, and `mergeGemMetadata` folds their gems into the same list the `CHECKSUMS` gems arrive in. `examples/complex` builds `errgonomic` (git) and `hello_gem` (path) and its validator loads both. See #13 for the build half.
@@ -48,7 +50,7 @@ At the `gemfileEnv` level the guards are gated by `test/integration/lockfile-gua
 
    Two more jobs run beside it. `unit` evaluates the standalone `test/unit/test-*.nix` wrappers, which reach the same logic through an unpinned `fetchTarball` rather than through the flake's `pkgs.lib`. `examples` runs `nix flake check` in each of `examples/{simple,medium,complex}`, which cannot join the root flake: they are standalone flakes with a `path:../..` input, and pulling them in would be a self-reference cycle. CI is `x86_64-linux` only.
 
-   No test gates this one, and none can: what CI runs is evidence produced by a run, not an assertion the suite can make about itself. The thirteen checks `nix flake check` executes are `unit-parse`, `unit-resolve`, `unit-pipeline`, `unit-credentials`, `unit-arguments`, `unit-pending`, `credentials-wiring`, `arguments-strictness`, `lockfile-guards`, `git-path-wiring`, `ruby-override-wiring`, `integration-platform-gems` and `integration-gemspec-directive`.
+   No test gates this one, and none can: what CI runs is evidence produced by a run, not an assertion the suite can make about itself. The nineteen checks `nix flake check` executes are `arguments-strictness`, `bundler-gem-home-guard`, `bundler-git-repo-with-two-gems`, `bundler-layout`, `bundler-remote-order`, `credentials-netrc-phase`, `credentials-wiring`, `git-path-wiring`, `integration-gemspec-directive`, `integration-platform-gems`, `lockfile-guards`, `ruby-override-wiring`, `unit-arguments`, `unit-bundler`, `unit-credentials`, `unit-parse`, `unit-pending`, `unit-pipeline` and `unit-resolve`.
 
 7. **Open. `gem-groups.rb` group propagation may over-propagate.**
    The Ruby script iterates all specs and propagates groups through
@@ -137,21 +139,14 @@ the less we maintain and the more we benefit from upstream fixes.
 
     Three limitations stand, all recorded in `test/unit/test-pending-logic.nix` under `nonTests`. A git gem's compiled extension is installed under a name Bundler does not look for (#10). A git gem with a native extension has no `gemPath` (#9). And `builtins.fetchGit` runs at evaluation time and is not cacheable, for which `gemSrcOverrides` is the escape hatch.
 
-14. **Partly done. The parsers exist; nothing calls them.**
+14. **Closed. Group membership is not in the lockfile, so the IFD cannot be retired this way.**
     The `specs:` half is wired: `parseDependencies` feeds the expansion in #12, and it reads every `specs:` block, GIT and PATH sections included, so a git gem's own dependencies survive the group filter too.
 
-    The `DEPENDENCIES` half is written and unit-tested but unreachable from the pipeline. `parseDependenciesSection` and `takeDependenciesSection` in `parse.nix` are exported and covered by `test/unit/test-parse-logic.nix`, and `parse-gemfile-and-lockfile.nix` calls neither. Retiring the IFD means calling them and propagating groups along the `specs:` edges in Nix.
+    The `DEPENDENCIES` half cannot do what this item asked of it. The claim it rested on — that "between the two sections, the entire dependency graph and group assignment is recoverable from the lockfile alone" — is wrong about groups, in both directions, measured against Bundler 2.7.2:
 
-    The rest of this item still stands. Between the two sections, the entire dependency graph and group assignment is recoverable from the lockfile alone, in pure Nix, without running Ruby.
+    - **Writing.** `Bundler::Dependency#to_lock` is the method that writes a `DEPENDENCIES` line. It appends the requirement and a `!` for a pinned source, and never consults `groups`. Three dependencies identical but for their groups (`[:test]`, `[:production, :development]`, `[:default]`) produce the same line, `"  rake"`.
+    - **Reading.** `Bundler::LockfileParser#parse_dependency` builds each dependency from a name and a version only. Run over `omc/sprout`'s real `Gemfile.lock`, whose `Gemfile` has five `group` blocks, it returns `[:default]` for all 112 dependencies — `debug`, `rubocop` and `annotaterb` included, every one of them declared in `:development` or `:test`.
 
-    Eliminating the `runCommand` that invokes `gem-groups.rb` would:
-    - Remove the Ruby/Bundler build-time dependency from evaluation
-    - Make the parser fully pure (no IFD)
-    - Speed up `nix eval` by avoiding a derivation build
-    - Make the entire pipeline testable without IO
+    Groups live in the `Gemfile`, where they can be written with arbitrary Ruby, and `gem-groups.rb` reads them through `Bundler.definition.dependencies`. Nothing in the lockfile records the answer, so no amount of pure Nix parsing recovers it. The IFD stays, and the way to avoid it stays the `gemGroups` argument.
 
-    **Action:** Parse the dependency tree from the `specs:` indentation
-    structure (4-space = gem, 6-space = dependency). Parse group membership
-    from the `DEPENDENCIES` section. Propagate groups through the dependency
-    edges in pure Nix. This is the single highest-leverage change for the
-    project's architecture.
+    `parseDependenciesSection` and `takeDependenciesSection` remain exported and unit-tested with no caller. They correctly parse what the section does hold — names, requirements and the pinned marker — which is what a `toGemset` (#11) would need. Nothing consumes them today, and that is a gap rather than a defect.

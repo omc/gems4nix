@@ -18,6 +18,7 @@ let
   defaultRuby = ruby;
   argHelpers = import ./arguments.nix { inherit lib; };
   bundlerHelpers = import ./bundler.nix { inherit lib; };
+  parseHelpers = import ./parse.nix { inherit lib; };
 
   # function arguments:
   gemfileEnv =
@@ -78,6 +79,26 @@ let
       };
       gemMetadata = parsed.gems;
       depGraph = parsed.depGraph;
+
+      # ── the Ruby the lockfile was resolved with ──────────────────
+      #
+      # A lockfile that names one and disagrees with `ruby` describes an
+      # environment other than the one being built. Across the ABI that is
+      # every gem, so it throws; below it, it is a warning, because the
+      # requirement Bundler enforces is the Gemfile's and this value only
+      # records what resolution happened to run on.
+      rubyVerdict = parseHelpers.rubyVersionVerdict {
+        locked = parsed.rubyVersion;
+        actual = ruby.version;
+      };
+      applyRubyVerdict =
+        value:
+        if rubyVerdict == null then
+          value
+        else if rubyVerdict.level == "error" then
+          throw rubyVerdict.message
+        else
+          lib.warn rubyVerdict.message value;
 
       # ── credentials (pure logic lives in credentials.nix) ────────
       credentialHelpers = import ./credentials.nix { inherit lib; };
@@ -282,9 +303,9 @@ let
           # buildRubyGem derives `src` from source.remotes and source.sha256 alone,
           # with no way to pass fetchurl the netrc arguments. Handing it a finished
           # `src` is the only opening, so gems on a credentialed remote get one.
-          credential = credentialHelpers.credentialFor checkedCredentials configured;
+          gemCredentials = credentialHelpers.credentialsFor checkedCredentials configured;
           authenticated =
-            if credential == null then
+            if gemCredentials == [ ] then
               configured
             else
               configured
@@ -294,12 +315,12 @@ let
                     urls = credentialHelpers.gemUrls configured;
                     inherit (configured.source) sha256;
                   }
-                  // credentialHelpers.netrcFetchAttrs credential
+                  // credentialHelpers.netrcFetchAttrs gemCredentials
                 );
               };
           traced =
             if debug then
-              builtins.trace "gems4nix [debug]: building ${configured.gemName} ${configured.version} (${configured.platform})${lib.optionalString (credential != null) " with credentials for ${credential.host}"}" authenticated
+              builtins.trace "gems4nix [debug]: building ${configured.gemName} ${configured.version} (${configured.platform})${lib.optionalString (gemCredentials != [ ]) " with credentials for ${lib.concatMapStringsSep ", " (c: c.host) gemCredentials}"}" authenticated
             else
               authenticated;
         in
@@ -307,63 +328,65 @@ let
       ) platformResolvedGemsByName;
     in
     argHelpers.checkArgs "gemfileEnv" gemfileEnv args (
-      assert srcOverridesChecked == true;
-      buildEnv {
-        name = "${name}-${lib.strings.concatStringsSep "-" groups}-${lib.strings.concatStringsSep "-" resolvedPlatforms}";
-        paths = finalGems;
-        # GEM_HOME is what decides where Bundler looks for a git gem: its
-        # install path is Gem.dir, and BUNDLE_PATH is not a substitute because
-        # Bundler appends ruby/<version> to that one. Setting it unconditionally
-        # rather than only when unset, because an inherited GEM_HOME is exactly
-        # the case where a git gem goes missing and nothing says why. The
-        # environment is read-only, so `gem install` into it fails; declare the
-        # gem in the Gemfile instead.
-        #
-        # GEM_PATH accumulates and GEM_HOME cannot, so two of these
-        # environments in one shell would leave the loser's git gems out of
-        # Bundler's reach while plain `require` still found them. That is the
-        # failure this whole layout exists to remove, one level up, so the
-        # second one refuses instead. GEMS4NIX_GEM_HOME is what distinguishes
-        # another gems4nix environment from a GEM_HOME the user brought, which
-        # is overridden without comment. It has to name a directory that is
-        # really there, because refusing costs a shell and a stray export
-        # should not be able to do that.
-        #
-        # Both variables describe a build environment. Nothing here bakes
-        # either into an output, and a build recipe that captures one is
-        # recording the machine it ran on.
-        postBuild =
-          let
-            gemHome = "$out/${ruby.gemPath}";
-          in
-          ''
-            mkdir -p $out/nix-support
-            cat > $out/nix-support/setup-hook <<EOF
-            gems4nixGemHome="${gemHome}"
-            EOF
-            cat >> $out/nix-support/setup-hook <<'HOOK'
-            gems4nixOther="''${GEMS4NIX_GEM_HOME-}"
-            case "''$gems4nixOther" in
-              /nix/store/*) [ -d "''$gems4nixOther" ] || gems4nixOther="" ;;
-              *) gems4nixOther="" ;;
-            esac
-            if [ -n "''$gems4nixOther" ] && [ "''$gems4nixOther" != "''$gems4nixGemHome" ]; then
-              echo 'gems4nix: two gems4nix environments are on this shell, and GEM_HOME can only name one.' >&2
-              echo "  already here: ''$gems4nixOther" >&2
-              echo "  and now:      ''$gems4nixGemHome" >&2
-              echo 'Bundler reads a git gem only from bundler/gems under GEM_HOME, so the git gems of' >&2
-              echo 'whichever environment loses go missing from require "bundler/setup" while a plain' >&2
-              echo 'require still finds them. Build one gemfileEnv from both Gemfiles, or keep the two' >&2
-              echo 'environments in separate shells.' >&2
-              exit 1
-            fi
-            export GEMS4NIX_GEM_HOME="''$gems4nixGemHome"
-            export GEM_HOME="''$gems4nixGemHome"
-            export GEM_PATH="''$gems4nixGemHome''${GEM_PATH:+:''$GEM_PATH}"
-            unset gems4nixGemHome gems4nixOther
-            HOOK
-          '';
-      }
+      applyRubyVerdict (
+        assert srcOverridesChecked == true;
+        buildEnv {
+          name = "${name}-${lib.strings.concatStringsSep "-" groups}-${lib.strings.concatStringsSep "-" resolvedPlatforms}";
+          paths = finalGems;
+          # GEM_HOME is what decides where Bundler looks for a git gem: its
+          # install path is Gem.dir, and BUNDLE_PATH is not a substitute because
+          # Bundler appends ruby/<version> to that one. Setting it unconditionally
+          # rather than only when unset, because an inherited GEM_HOME is exactly
+          # the case where a git gem goes missing and nothing says why. The
+          # environment is read-only, so `gem install` into it fails; declare the
+          # gem in the Gemfile instead.
+          #
+          # GEM_PATH accumulates and GEM_HOME cannot, so two of these
+          # environments in one shell would leave the loser's git gems out of
+          # Bundler's reach while plain `require` still found them. That is the
+          # failure this whole layout exists to remove, one level up, so the
+          # second one refuses instead. GEMS4NIX_GEM_HOME is what distinguishes
+          # another gems4nix environment from a GEM_HOME the user brought, which
+          # is overridden without comment. It has to name a directory that is
+          # really there, because refusing costs a shell and a stray export
+          # should not be able to do that.
+          #
+          # Both variables describe a build environment. Nothing here bakes
+          # either into an output, and a build recipe that captures one is
+          # recording the machine it ran on.
+          postBuild =
+            let
+              gemHome = "$out/${ruby.gemPath}";
+            in
+            ''
+              mkdir -p $out/nix-support
+              cat > $out/nix-support/setup-hook <<EOF
+              gems4nixGemHome="${gemHome}"
+              EOF
+              cat >> $out/nix-support/setup-hook <<'HOOK'
+              gems4nixOther="''${GEMS4NIX_GEM_HOME-}"
+              case "''$gems4nixOther" in
+                /nix/store/*) [ -d "''$gems4nixOther" ] || gems4nixOther="" ;;
+                *) gems4nixOther="" ;;
+              esac
+              if [ -n "''$gems4nixOther" ] && [ "''$gems4nixOther" != "''$gems4nixGemHome" ]; then
+                echo 'gems4nix: two gems4nix environments are on this shell, and GEM_HOME can only name one.' >&2
+                echo "  already here: ''$gems4nixOther" >&2
+                echo "  and now:      ''$gems4nixGemHome" >&2
+                echo 'Bundler reads a git gem only from bundler/gems under GEM_HOME, so the git gems of' >&2
+                echo 'whichever environment loses go missing from require "bundler/setup" while a plain' >&2
+                echo 'require still finds them. Build one gemfileEnv from both Gemfiles, or keep the two' >&2
+                echo 'environments in separate shells.' >&2
+                exit 1
+              fi
+              export GEMS4NIX_GEM_HOME="''$gems4nixGemHome"
+              export GEM_HOME="''$gems4nixGemHome"
+              export GEM_PATH="''$gems4nixGemHome''${GEM_PATH:+:''$GEM_PATH}"
+              unset gems4nixGemHome gems4nixOther
+              HOOK
+            '';
+        }
+      )
     );
 in
 gemfileEnv

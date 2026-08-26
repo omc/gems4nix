@@ -130,6 +130,29 @@
             }) "PASS"
           );
 
+          # gems4nix reverses a GEM section's remote list because Bundler
+          # writes the file in the opposite order to the one it looks remotes
+          # up in. That is a fact about Bundler, not about this code, so it is
+          # measured against the real thing rather than asserted about.
+          bundler-remote-order =
+            pkgs.runCommand "bundler-remote-order"
+              {
+                nativeBuildInputs = [
+                  pkgs.ruby
+                  pkgs.bundler
+                ];
+              }
+              ''
+                ruby ${./scripts/bundler-remote-order.rb} "${pkgs.bundler.version}" | tee $out
+              '';
+
+          # Runs the netrc phase instead of asserting on its text: a value
+          # lands verbatim, a second host appends, and a newline in a
+          # credential is refused before it can forge an entry.
+          credentials-netrc-phase = import ./test/integration/credentials/netrc-phase.nix {
+            inherit pkgs gemfileEnv;
+          };
+
           # Asserts that gemfileEnv rejects an argument it does not declare.
           arguments-strictness = pkgs.writeText "arguments-strictness" (
             builtins.deepSeq (import ./test/integration/arguments/strictness.nix {
@@ -172,73 +195,69 @@
           # Asserts the setup hook refuses to be the second gems4nix
           # environment in one shell, rather than quietly winning GEM_HOME and
           # taking another environment's git gems out of Bundler's reach.
-          bundler-gem-home-guard =
-            pkgs.runCommand "bundler-gem-home-guard" { }
-              ''
-                hook="${bundlerLayoutGems}/nix-support/setup-hook"
+          bundler-gem-home-guard = pkgs.runCommand "bundler-gem-home-guard" { } ''
+            hook="${bundlerLayoutGems}/nix-support/setup-hook"
 
-                actual=$(unset GEM_HOME GEMS4NIX_GEM_HOME; . "$hook"; echo "$GEM_HOME")
-                if [ "$actual" != "${bundlerLayoutGemPath}" ]; then
-                  echo "hook set GEM_HOME to $actual, expected ${bundlerLayoutGemPath}" >&2
-                  exit 1
-                fi
+            actual=$(unset GEM_HOME GEMS4NIX_GEM_HOME; . "$hook"; echo "$GEM_HOME")
+            if [ "$actual" != "${bundlerLayoutGemPath}" ]; then
+              echo "hook set GEM_HOME to $actual, expected ${bundlerLayoutGemPath}" >&2
+              exit 1
+            fi
 
-                # A GEM_HOME the user brought is overridden without comment.
-                # Only another gems4nix environment is ambiguous, and only
-                # GEMS4NIX_GEM_HOME can tell the two apart.
-                actual=$(unset GEMS4NIX_GEM_HOME; export GEM_HOME=/home/someone/.local/share/gem; . "$hook"; echo "$GEM_HOME")
-                if [ "$actual" != "${bundlerLayoutGemPath}" ]; then
-                  echo "hook deferred to a user's own GEM_HOME: $actual" >&2
-                  exit 1
-                fi
+            # A GEM_HOME the user brought is overridden without comment.
+            # Only another gems4nix environment is ambiguous, and only
+            # GEMS4NIX_GEM_HOME can tell the two apart.
+            actual=$(unset GEMS4NIX_GEM_HOME; export GEM_HOME=/home/someone/.local/share/gem; . "$hook"; echo "$GEM_HOME")
+            if [ "$actual" != "${bundlerLayoutGemPath}" ]; then
+              echo "hook deferred to a user's own GEM_HOME: $actual" >&2
+              exit 1
+            fi
 
-                # A GEMS4NIX_GEM_HOME that names no environment must not be
-                # able to refuse a shell on its own. Refusing costs a shell, so
-                # a false positive is expensive by construction.
-                for junk in garbage-value /nix/store/00000000000000000000000000000000-gone/lib/ruby/gems/3.3.0; do
-                  actual=$(export GEMS4NIX_GEM_HOME="$junk"; . "$hook"; echo "$GEM_HOME")
-                  if [ "$actual" != "${bundlerLayoutGemPath}" ]; then
-                    echo "a GEMS4NIX_GEM_HOME of '$junk' was trusted; GEM_HOME came out as '$actual'" >&2
-                    exit 1
-                  fi
-                done
+            # A GEMS4NIX_GEM_HOME that names no environment must not be
+            # able to refuse a shell on its own. Refusing costs a shell, so
+            # a false positive is expensive by construction.
+            for junk in garbage-value /nix/store/00000000000000000000000000000000-gone/lib/ruby/gems/3.3.0; do
+              actual=$(export GEMS4NIX_GEM_HOME="$junk"; . "$hook"; echo "$GEM_HOME")
+              if [ "$actual" != "${bundlerLayoutGemPath}" ]; then
+                echo "a GEMS4NIX_GEM_HOME of '$junk' was trusted; GEM_HOME came out as '$actual'" >&2
+                exit 1
+              fi
+            done
 
-                other="${otherGemPath}"
-                if (
-                  export GEM_HOME="$other" GEMS4NIX_GEM_HOME="$other"
-                  . "$hook"
-                ) 2>stderr.txt; then
-                  echo "a second gems4nix environment was accepted in silence" >&2
-                  exit 1
-                fi
+            other="${otherGemPath}"
+            if (
+              export GEM_HOME="$other" GEMS4NIX_GEM_HOME="$other"
+              . "$hook"
+            ) 2>stderr.txt; then
+              echo "a second gems4nix environment was accepted in silence" >&2
+              exit 1
+            fi
 
-                for needle in "$other" "${bundlerLayoutGemPath}" "bundler/setup"; do
-                  if ! grep -qF "$needle" stderr.txt; then
-                    echo "the refusal does not mention $needle:" >&2
-                    cat stderr.txt >&2
-                    exit 1
-                  fi
-                done
+            for needle in "$other" "${bundlerLayoutGemPath}" "bundler/setup"; do
+              if ! grep -qF "$needle" stderr.txt; then
+                echo "the refusal does not mention $needle:" >&2
+                cat stderr.txt >&2
+                exit 1
+              fi
+            done
 
-                touch $out
-              '';
+            touch $out
+          '';
 
           # Measures what one git repository supplying two gems produces. Both
           # gems write the same bundler/gems scope, which is what a real
           # checkout of such a repository looks like.
-          bundler-git-repo-with-two-gems =
-            pkgs.runCommand "bundler-git-repo-with-two-gems" { }
-              ''
-                scope="${bundlerLayoutGemPath}/bundler/gems/widget-ruby-4f2e1c8a9b3d"
-                for entry in widget.gemspec sprocket.gemspec lib/widget.rb lib/sprocket.rb; do
-                  if [ ! -e "$scope/$entry" ]; then
-                    echo "the shared checkout is missing $entry:" >&2
-                    ls -R "$scope" >&2
-                    exit 1
-                  fi
-                done
-                touch $out
-              '';
+          bundler-git-repo-with-two-gems = pkgs.runCommand "bundler-git-repo-with-two-gems" { } ''
+            scope="${bundlerLayoutGemPath}/bundler/gems/widget-ruby-4f2e1c8a9b3d"
+            for entry in widget.gemspec sprocket.gemspec lib/widget.rb lib/sprocket.rb; do
+              if [ ! -e "$scope/$entry" ]; then
+                echo "the shared checkout is missing $entry:" >&2
+                ls -R "$scope" >&2
+                exit 1
+              fi
+            done
+            touch $out
+          '';
 
           integration-platform-gems =
             pkgs.runCommand "integration-platform-gems"

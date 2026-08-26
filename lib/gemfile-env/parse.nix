@@ -202,28 +202,6 @@ let
         };
       };
 
-  # given a bunch of lines that represent a GEM section, return the remote and the list of gems.
-  # we're not concerned with the version specs here, since we'll get that later from the checksum.
-  # this is just to reconstruct a url to the gem file later.
-  parseGemSection =
-    lines:
-    let
-      remoteStr = builtins.elemAt (lib.strings.splitString ": " (builtins.elemAt lines 0)) 1;
-      remote =
-        if (lib.strings.hasSuffix "/" remoteStr) then lib.strings.removeSuffix "/" remoteStr else remoteStr;
-      gems = lib.lists.map (
-        line:
-        let
-          parts = builtins.filter (s: s != "") (lib.strings.splitString " " line);
-          name = builtins.elemAt parts 0;
-        in
-        name
-      ) (lib.lists.drop 2 lines);
-    in
-    {
-      inherit remote gems;
-    };
-
   # ── GIT / PATH sections ──────────────────────────────────────
 
   # Split the body of a GIT or PATH section into its options and its gems.
@@ -238,9 +216,16 @@ let
   # A 6-space line names a dependency, not a gem to build from this section.
   # Count the spaces, or such a line becomes a gem that nothing can build.
   #
+  # A key in `repeatable` collects its values into a list, in the order the
+  # lockfile writes them. Every other key holds a single string and a repeat
+  # throws, because two answers to a question with one answer cannot be merged.
+  #
   # Returns: { headers = { remote = "..."; ... }; specLines = [ ... ]; hasSpecs = bool; }
   parseSectionBody =
-    lines:
+    {
+      lines,
+      repeatable ? [ ],
+    }:
     let
       step =
         acc: line:
@@ -266,14 +251,22 @@ let
           else
             let
               key = builtins.elemAt m 0;
+              value = builtins.elemAt m 1;
             in
-            if acc.headers ? ${key} then
-              throw "gems4nix: repeated option '${key}' in a GIT/PATH section"
+            if builtins.elem key repeatable then
+              acc
+              // {
+                headers = acc.headers // {
+                  ${key} = (acc.headers.${key} or [ ]) ++ [ value ];
+                };
+              }
+            else if acc.headers ? ${key} then
+              throw "gems4nix: repeated option '${key}' in a lockfile source section"
             else
               acc
               // {
                 headers = acc.headers // {
-                  ${key} = builtins.elemAt m 1;
+                  ${key} = value;
                 };
               };
 
@@ -287,6 +280,45 @@ let
     {
       inherit (result) headers specLines hasSpecs;
     };
+
+  # A GEM section names the remotes its gems come from, and the gems it
+  # provides. Versions come from CHECKSUMS, so only the names matter here.
+  #
+  # Bundler puts several `remote:` lines in one GEM section when a Gemfile
+  # declares more than one global source, and looks them up last-declared
+  # first. The file is written the other way round: `Source::Rubygems`
+  # unshifts each remote as it is declared and `to_lock` reverses that back,
+  # so the lockfile lists them first-declared first. Reading the file top to
+  # bottom would try Bundler's lowest-priority remote first, so the list is
+  # reversed here and comes out equal to Bundler's own `remotes`.
+  #
+  # Only the 4-space lines are gems of this section. A 6-space line names a
+  # dependency, which some other section may well provide; counting it here
+  # claims this section's remote for a gem that is not on it.
+  parseGemSection =
+    lines:
+    let
+      body = parseSectionBody {
+        inherit lines;
+        repeatable = [ "remote" ];
+      };
+      h = body.headers;
+      unknown = builtins.filter (k: k != "remote") (builtins.attrNames h);
+      remotes = lib.lists.reverseList (lib.lists.map (lib.strings.removeSuffix "/") (h.remote or [ ]));
+    in
+    if !body.hasSpecs then
+      throw "gems4nix: GEM section has no 'specs:' line"
+    else if unknown != [ ] then
+      throw "gems4nix: unsupported key '${builtins.head unknown}' in GEM section"
+    else if remotes == [ ] then
+      throw "gems4nix: GEM section has no 'remote:'"
+    else
+      {
+        inherit remotes;
+        # A name repeats once per locked platform, and every variant is on the
+        # same remote, so one entry per name says everything.
+        gems = lib.unique (lib.lists.map (l: (parseSpecLine l).gemName) body.specLines);
+      };
 
   # Options we recognise in a GIT section. An unrecognised option is an error,
   # because most options change which files the gem is built from. To ignore
@@ -343,7 +375,7 @@ let
   parseGitSection =
     lines:
     let
-      body = parseSectionBody lines;
+      body = parseSectionBody { inherit lines; };
       h = validateSection {
         kind = "GIT";
         inherit body;
@@ -368,7 +400,7 @@ let
   parsePathSection =
     lines:
     let
-      body = parseSectionBody lines;
+      body = parseSectionBody { inherit lines; };
       h = validateSection {
         kind = "PATH";
         inherit body;
@@ -483,6 +515,70 @@ let
     in
     if idx != null then takeLines idx lines else [ ];
 
+  # ── RUBY VERSION ─────────────────────────────────────────────
+
+  # The Ruby a lockfile was resolved with, or null when it names none.
+  #
+  # Bundler writes the section only for a Gemfile that declares a `ruby`
+  # requirement, so most lockfiles have none, and that is not an error.
+  #
+  # Two shapes of the value trip up a reader. It is indented by three spaces,
+  # not the two an option line takes, and it may carry a patchlevel:
+  # `ruby 3.3.10p183`. The patchlevel is dropped, because the only thing this
+  # is ever compared against is a Ruby derivation's `version`, which never has
+  # one.
+  #
+  # A value in any other shape throws rather than being read as far as it
+  # parses. JRuby writes `ruby 3.1.4 (jruby 9.4.5.0)`, and taking the 3.1.4
+  # from it would claim a match gems4nix cannot deliver.
+  parseRubyVersion =
+    lines:
+    let
+      idx = lib.lists.findFirstIndex (l: l == "RUBY VERSION") null lines;
+      body = if idx == null then [ ] else takeLines idx lines;
+      raw = if body == [ ] then null else builtins.head body;
+      m = if raw == null then null else builtins.match "   ruby ([0-9]+(\\.[0-9]+)*)(p[0-9]+)?" raw;
+    in
+    if raw == null then
+      null
+    else if m == null then
+      throw "gems4nix: cannot read the RUBY VERSION section of the lockfile: expected '   ruby X.Y.Z', got '${raw}'"
+    else
+      builtins.head m;
+
+  # The part of a Ruby version that decides whether two Rubies are
+  # interchangeable. Gems install under lib/ruby/gems/<major>.<minor>.0 and a
+  # native extension compiles against that ABI, so a difference here means
+  # every gem in the environment was built for a Ruby the lockfile does not
+  # describe. A difference below it moves nothing.
+  rubyAbi = version: lib.concatStringsSep "." (lib.lists.take 2 (lib.splitString "." version));
+
+  # Compare the Ruby a lockfile was resolved with against the Ruby an
+  # environment is built from. Returns null when they agree or when the
+  # lockfile names none, and otherwise { level; message; }.
+  #
+  # An ABI difference is an error. Anything below it is a warning, because the
+  # requirement Bundler enforces lives in the Gemfile rather than here: this
+  # value records what resolution happened to run on, and a Gemfile asking for
+  # `~> 3.3` is satisfied by any of them.
+  rubyVersionVerdict =
+    { locked, actual }:
+    let
+      both = "the lockfile was resolved with Ruby ${toString locked}, and this environment is built with Ruby ${toString actual}";
+    in
+    if locked == null || locked == actual then
+      null
+    else if rubyAbi locked != rubyAbi actual then
+      {
+        level = "error";
+        message = "gems4nix: ${both}. Gems install under lib/ruby/gems/${rubyAbi actual}.0 and native extensions compile against that ABI, so nothing built here would match the lockfile. Pass a matching `ruby` to gemfileEnv, or relock with the Ruby you build against.";
+      }
+    else
+      {
+        level = "warning";
+        message = "gems4nix: ${both}. They share an ABI, so the environment builds; a gem whose required_ruby_version falls between the two will not install.";
+      };
+
   # ── lockfile-level assembly (pure, no IO) ────────────────────
 
   # Parse the full content of a Gemfile.lock into its checksum, GEM, GIT and
@@ -561,26 +657,41 @@ let
         gitSections
         pathSections
         ;
+      rubyVersion = parseRubyVersion lines;
     };
 
-  # Invert gem sections into a flat { gemName = remote; ... } lookup.
-  # First-writer-wins when a gem appears in multiple sections (builtins.listToAttrs
-  # keeps the first entry for duplicate keys).
-  # TODO: group by gem name for multiple remotes; e.g., depot depends on faraday
-  # which shows up in both but we prefer rubygems.org.
+  # Invert gem sections into a flat { gemName = [ remote ... ]; } lookup. A gem
+  # gets every remote of the section that provides it, because any of them may
+  # serve it and the lockfile's order is Bundler's priority order.
+  #
+  # Two sections claiming one gem is not a lockfile Bundler writes: it locks a
+  # resolved spec under the single source that resolved it, so a written
+  # lockfile is unambiguous by construction. Meeting the same ambiguity during
+  # resolution, Bundler asks the user to name the source in the Gemfile, and
+  # refuses outright under bundler_4_mode. Refuse here rather than taking
+  # whichever section came first, which reads as a decision and is not.
   indexRemotes =
     gemSections:
-    builtins.listToAttrs (
-      lib.lists.flatten (
-        lib.lists.map (
-          section:
-          lib.lists.map (gem: {
-            name = gem;
-            value = section.remote;
-          }) section.gems
-        ) gemSections
-      )
-    );
+    let
+      entries = lib.lists.concatMap (
+        section:
+        lib.lists.map (gem: {
+          name = gem;
+          value = section.remotes;
+        }) section.gems
+      ) gemSections;
+
+      claimed = builtins.groupBy (e: e.name) entries;
+      contested = builtins.attrNames (lib.attrsets.filterAttrs (_: v: builtins.length v > 1) claimed);
+    in
+    if contested != [ ] then
+      let
+        gemName = builtins.head contested;
+        remotes = lib.lists.concatMap (e: e.value) claimed.${gemName};
+      in
+      throw "gems4nix: '${gemName}' is provided by more than one GEM section in the lockfile (${lib.concatStringsSep ", " remotes}); add it to the source block for the remote you want it from and relock"
+    else
+      builtins.listToAttrs entries;
 
   # Merge parsed checksums with group info and remote URLs into the final
   # gem metadata list that the rest of the pipeline expects.
@@ -611,7 +722,9 @@ let
           ;
         groups = groupsFor gemAttrs.gemName;
         source = gemAttrs.source // {
-          remotes = [ gemRemotes.${gemAttrs.gemName} ];
+          remotes =
+            gemRemotes.${gemAttrs.gemName}
+              or (throw "gems4nix: '${gemAttrs.gemName}' has a checksum but no GEM section provides it");
           type = "gem";
         };
       }) checksumSection;
@@ -701,6 +814,9 @@ in
     parseDependencies
     parseDependenciesSection
     takeDependenciesSection
+    parseRubyVersion
+    rubyAbi
+    rubyVersionVerdict
     parseLockfile
     indexRemotes
     mergeGemMetadata

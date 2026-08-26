@@ -99,6 +99,24 @@ A `CHECKSUMS` line carries no hash, which means the gem came from a `GIT` or `PA
 **"gems4nix: PATH source '&lt;dir&gt;' does not exist at &lt;path&gt;"**
 A `PATH` section's `remote:` resolved to a directory that is not there. `remote:` is relative to `root`, which defaults to the directory holding the `Gemfile`. If the Gemfile is not co-located with its path gems, pass `root` explicitly. Note that Nix can only see a path inside the flake's source tree.
 
+**"gems4nix: '&lt;gem&gt;' is provided by more than one GEM section in the lockfile"**
+Two `GEM` sections both list that gem, and nothing in the lockfile says which remote it should come from. Bundler locks a resolved gem under the single source that resolved it, so this is not a lockfile `bundle lock` writes; a hand-edited or merged one is the usual cause. Pick a remote in the `Gemfile` with a source block and re-run `bundle lock`:
+
+```ruby
+source "https://rubygems.pkg.github.com/omc" do
+  gem "depot"
+end
+```
+
+**"gems4nix: the lockfile was resolved with Ruby X, and this environment is built with Ruby Y"**
+The `RUBY VERSION` section of your lockfile names a Ruby whose major.minor differs from the one `gemfileEnv` builds against. Gems install under `lib/ruby/gems/<major>.<minor>.0` and native extensions compile against that ABI, so every gem in the environment would be built for a Ruby the lockfile does not describe. Pass a matching `ruby` to `gemfileEnv`, or re-run `bundle lock` under the Ruby you build against. The same message at warning level, which does not stop the build, means the two differ only below the ABI. See [The Ruby the lockfile was resolved with](#the-ruby-the-lockfile-was-resolved-with).
+
+**"gems4nix: '&lt;gem&gt;' has a checksum but no GEM section provides it"**
+A `CHECKSUMS` line carries a hash, which means the gem came from a `GEM` section, and no `GEM` section in the lockfile lists it. There is nowhere to fetch it from. A hand-edited or truncated lockfile is the usual cause; regenerate it with `bundle lock`.
+
+**"gems4nix: the value of $VAR, the credential for &lt;host&gt;, contains a newline"**
+A netrc entry is a single line, so a credential value carrying a newline would write further lines of its own into the netrc and could claim another host. The usual cause is a secret read from a file with its trailing newline left on. Strip it where the variable is set. gems4nix refuses the same shape at evaluation time for anything it can see then: a newline in a `credentials` key, a `usernameVar` or `passwordVar` that is not a shell identifier, and a `netrcFile` path containing a character the shell acts on.
+
 **"gems4nix: PLUGIN SOURCE sections are not supported"**
 Your lockfile has a `PLUGIN SOURCE` section, written by a Bundler plugin that supplies gems from somewhere gems4nix does not know how to fetch. There is no way to build those gems here. Remove the plugin from the `Gemfile` and re-run `bundle lock`, or vendor the gems it provides as a `PATH` source.
 
@@ -178,6 +196,33 @@ The pipeline has three stages:
 3. **Build** (`default.nix`) -- applies `gemConfig` overrides (only to
    ruby-platform gems), calls `buildRubyGem` for each resolved gem, and
    combines them into a `buildEnv`.
+
+### Where a gem is fetched from
+
+A `GEM` section names the remotes its gems come from, and gems4nix gives every gem in that section every one of them. Bundler puts more than one `remote:` line in a single section when a `Gemfile` declares more than one global source, and it looks the last-declared one up first — but the file is written the other way round. `Source::Rubygems#add_remote` unshifts each remote as the `Gemfile` declares it, and `#to_lock` reverses that back, so the lockfile lists them first-declared first. gems4nix reverses the file's order, which makes its list identical to Bundler's own `remotes`, and the fetch then tries them highest-priority first and stops at the first that serves the gem.
+
+Reading the file top to bottom instead would try Bundler's *lowest*-priority source first, which is usually the public `source` line at the top of the `Gemfile` rather than the private registry added below it. Verified against Bundler 2.5.22, 2.6.6, 2.6.9 and 2.7.2 by `scripts/bundler-remote-order.rb`, which is also a `nix flake check` check, so a Bundler that changed the ordering shows up as a failing build.
+
+Only the four-space lines under `specs:` are gems of a section. The six-space lines below each one name that gem's dependencies, which another section may well provide.
+
+A gem that two `GEM` sections both claim is an evaluation error. Bundler locks a resolved gem under the single source that resolved it, so this is not a lockfile it writes. Faced with the same ambiguity while resolving, Bundler asks you to name the source in the `Gemfile`, and refuses outright under `bundler_4_mode`; older Bundler warns and takes the first source it saw. gems4nix refuses rather than copying that fallback, because here the "first source" is only the order the sections happen to appear in, and choosing by it would read as a decision when it is not.
+
+### The Ruby the lockfile was resolved with
+
+Bundler writes a `RUBY VERSION` section when the `Gemfile` declares a `ruby` requirement, recording the Ruby that resolution actually ran on:
+
+```
+RUBY VERSION
+   ruby 3.4.9p183
+```
+
+gems4nix compares it against the `ruby` it builds with, and how loudly depends on where they differ:
+
+- **A different major.minor is an evaluation error.** Gems install under `lib/ruby/gems/<major>.<minor>.0` and native extensions compile against that ABI, so the whole environment would be built for a Ruby the lockfile does not describe. Pass a matching `ruby`, or relock.
+- **A difference below that is a warning** and the build proceeds. The requirement Bundler enforces at runtime lives in the `Gemfile`, not here — a `Gemfile` asking for `ruby '~> 3.3'` is satisfied by every 3.3.x, and this section only records which one resolution happened to use. The one thing that can still bite is a gem whose `required_ruby_version` falls between the two.
+- **A lockfile with no `RUBY VERSION` section is not checked**, because there is nothing to check it against.
+
+The patchlevel is ignored. A `ruby` derivation's `version` never carries one, so there is nothing to compare it to.
 
 ### Platform resolution
 
@@ -341,6 +386,10 @@ A gem hosted on a private registry needs a credential inside the Nix build sandb
 
 The key is a bare host, matched against the remote each gem is fetched from. Gems on remotes you did not name are fetched unauthenticated, exactly as before. If you name a host no gem uses, gems4nix warns. That is almost always a typo.
 
+A gem whose `GEM` section carries several remotes is fetched from each in turn until one serves it, so every credentialed remote among them gets its own entry in that gem's netrc — modes may be mixed, one host from a file and another from environment variables. Credentialing only the first would turn the fallback into a bare 401 with none of the diagnostics below.
+
+Because a netrc entry is one line, anything that could add a line is refused. The host key, the two variable names and the `netrcFile` path are known while Nix evaluates, so a newline in any of them, a variable name that is not a shell identifier, or a path containing a character the shell acts on is an evaluation error naming the host and the field. A variable's *value* is not known until the build runs, so it is checked there instead, before the entry is written. A `netrcFile`'s contents are deliberately exempt: that file is a netrc, so being several lines and several hosts is the point of it.
+
 Either way the secret stays out of the Nix store: gems4nix writes a netrc into the build directory, which is discarded with the build.
 
 ### Mode 1: from a file you control
@@ -447,5 +496,6 @@ map.
 - **A path gem must live inside the flake's source tree.** Its `remote:` resolves against `root`, and Nix can only copy a source it can see.
 - **Only GitHub git remotes have been tried.** A locked revision is often not a branch tip, and a server with `uploadpack.allowAnySHA1InWant` off refuses to send one on its own; gems4nix asks for every ref to work around that.
 - **Bundler >= 2.5 is required**, and its `CHECKSUMS` section has to be enabled explicitly with `bundle lock --add-checksums`.
-- **Group extraction uses Ruby IFD** by default. This is an impurity at Nix
-  evaluation time. Pass `gemGroups` to avoid it.
+- **Group extraction uses Ruby IFD** by default. This is an impurity at Nix evaluation time: evaluating a `gemfileEnv` runs Bundler in a derivation and reads its output back. Pass `gemGroups` to avoid it.
+
+  Reading the groups out of the lockfile instead is not possible. Bundler does not write them there: `Bundler::Dependency#to_lock` produces the same `DEPENDENCIES` line whatever groups a dependency has, and `Bundler::LockfileParser` reads every dependency back as `[:default]`. Groups live in the `Gemfile`, where arbitrary Ruby can produce them, so Bundler is what has to evaluate them.
