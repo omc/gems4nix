@@ -20,6 +20,7 @@ nix eval --file test/unit/test-resolve.nix --json
 nix eval --file test/unit/test-pipeline.nix --json
 nix eval --file test/unit/test-credentials.nix --json
 nix eval --file test/unit/test-arguments.nix --json
+nix eval --file test/unit/test-bundler.nix --json
 
 # The pending ledger: every known limitation is still a limitation
 nix eval --file test/unit/test-pending.nix ledger
@@ -35,6 +36,7 @@ nix eval --file test/unit/test-resolve.nix --json && \
 nix eval --file test/unit/test-pipeline.nix --json && \
 nix eval --file test/unit/test-credentials.nix --json && \
 nix eval --file test/unit/test-arguments.nix --json && \
+nix eval --file test/unit/test-bundler.nix --json && \
 nix eval --file test/unit/test-pending.nix ledger && \
 echo "unit tests passed" && \
 for ex in simple medium complex; do
@@ -53,6 +55,7 @@ echo "all tests passed"
    - **Pipeline** (end-to-end parse + resolve) -- `test/unit/test-pipeline-logic.nix`
    - **Credentials** (private registry auth) -- `test/unit/test-credentials-logic.nix`
    - **Argument surface** (what `gemfileEnv` accepts) -- `test/unit/test-arguments-logic.nix`
+   - **Bundler's view of a git gem** (where Bundler reads one from) -- `test/unit/test-bundler-logic.nix`
    - **A known limitation you are not fixing yet** -- `test/unit/test-pending-logic.nix`
 
 2. Add a test case. Each test is an `assertEq` call with a descriptive name:

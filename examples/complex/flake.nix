@@ -76,6 +76,16 @@
               "test"
             ];
           };
+          # What Bundler needs to read at runtime, and nothing else. The PATH
+          # gem's remote is relative to the Gemfile, so vendor/ comes along;
+          # without it Bundler resolves hello_gem against a directory that is
+          # not there.
+          gemfileDir = pkgs.runCommand "complex-gemfile-dir" { } ''
+            mkdir -p $out
+            cp ${./Gemfile} $out/Gemfile
+            cp ${./Gemfile.lock} $out/Gemfile.lock
+            cp -r ${./vendor} $out/vendor
+          '';
         in
         {
           validate =
@@ -89,6 +99,27 @@
               ''
                 export GEM_PATH="${gems}/${pkgs.ruby.gemPath}"
                 ruby ${./validate.rb}
+                touch $out
+              '';
+
+          # Nothing here points Ruby at the gems: the environment's setup hook
+          # does that, and an app that has to be told where its gems are is not
+          # the thing being tested. The gems are read-only store paths on
+          # purpose, and BUNDLE_FROZEN turns a lockfile Bundler wants to
+          # rewrite into an error rather than a rewrite nobody sees.
+          bundler-setup =
+            pkgs.runCommand "complex-bundler-setup"
+              {
+                buildInputs = [
+                  pkgs.ruby
+                  gems
+                ];
+              }
+              ''
+                export BUNDLE_GEMFILE="${gemfileDir}/Gemfile"
+                export BUNDLE_FROZEN=1
+                ruby ${./bundler-setup.rb}
+                bundle exec rake --version
                 touch $out
               '';
         }

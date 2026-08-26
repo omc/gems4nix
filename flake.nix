@@ -69,6 +69,44 @@
             };
             groups = [ "default" ];
           };
+
+          # A git gem whose source is supplied rather than fetched, so this
+          # builds with no network. Two gems come from the one git remote,
+          # which is what a repository holding several gems looks like.
+          bundlerLayoutGems = gemfileEnv {
+            name = "bundler-layout-test";
+            gemfile = ./test/integration/bundler-layout/Gemfile;
+            gemfileLock = ./test/integration/bundler-layout/Gemfile.lock;
+            groups = [ "default" ];
+            platforms = [ "ruby" ];
+            gemGroups = {
+              widget = [ "default" ];
+              sprocket = [ "default" ];
+              gadget = [ "default" ];
+            };
+            gemSrcOverrides = {
+              widget = ./test/integration/bundler-layout/vendor/widget;
+              sprocket = ./test/integration/bundler-layout/vendor/sprocket;
+            };
+          };
+
+          bundlerLayoutGemPath = "${bundlerLayoutGems}/${pkgs.ruby.gemPath}";
+
+          # A second, unrelated environment, so the composition case is two
+          # real gems4nix environments rather than a path that only looks like
+          # one. Its only gem comes from a PATH source, so it builds offline.
+          otherGems = gemfileEnv {
+            name = "bundler-layout-other";
+            gemfile = ./test/integration/git-path-wiring/Gemfile;
+            gemfileLock = ./test/integration/git-path-wiring/Gemfile.lock;
+            groups = [ "default" ];
+            platforms = [ "ruby" ];
+            gemGroups = {
+              tiny_gem = [ "default" ];
+            };
+          };
+
+          otherGemPath = "${otherGems}/${pkgs.ruby.gemPath}";
         in
         {
           unit-resolve = nixEvalCheck "resolve" ./test/unit/test-resolve-logic.nix;
@@ -76,6 +114,7 @@
           unit-pipeline = nixEvalCheck "pipeline" ./test/unit/test-pipeline-logic.nix;
           unit-credentials = nixEvalCheck "credentials" ./test/unit/test-credentials-logic.nix;
           unit-arguments = nixEvalCheck "arguments" ./test/unit/test-arguments-logic.nix;
+          unit-bundler = nixEvalCheck "bundler" ./test/unit/test-bundler-logic.nix;
 
           # The pending ledger asserts that each known limitation is still a
           # limitation. It takes `.ledger` rather than the whole file, because
@@ -115,12 +154,91 @@
             }) "PASS"
           );
 
+          # Asserts a git gem gets the bundler/gems checkout Bundler resolves
+          # it out of, and that a path gem does not.
+          bundler-layout = pkgs.writeText "bundler-layout" (
+            builtins.deepSeq (import ./test/integration/bundler-layout/layout.nix {
+              inherit pkgs gemfileEnv;
+            }) "PASS"
+          );
+
           # Asserts an overridden `ruby` reaches the gems, not just GEM_PATH.
           ruby-override-wiring = pkgs.writeText "ruby-override-wiring" (
             builtins.deepSeq (import ./test/integration/ruby-override/wiring.nix {
               inherit pkgs gemfileEnv;
             }) "PASS"
           );
+
+          # Asserts the setup hook refuses to be the second gems4nix
+          # environment in one shell, rather than quietly winning GEM_HOME and
+          # taking another environment's git gems out of Bundler's reach.
+          bundler-gem-home-guard =
+            pkgs.runCommand "bundler-gem-home-guard" { }
+              ''
+                hook="${bundlerLayoutGems}/nix-support/setup-hook"
+
+                actual=$(unset GEM_HOME GEMS4NIX_GEM_HOME; . "$hook"; echo "$GEM_HOME")
+                if [ "$actual" != "${bundlerLayoutGemPath}" ]; then
+                  echo "hook set GEM_HOME to $actual, expected ${bundlerLayoutGemPath}" >&2
+                  exit 1
+                fi
+
+                # A GEM_HOME the user brought is overridden without comment.
+                # Only another gems4nix environment is ambiguous, and only
+                # GEMS4NIX_GEM_HOME can tell the two apart.
+                actual=$(unset GEMS4NIX_GEM_HOME; export GEM_HOME=/home/someone/.local/share/gem; . "$hook"; echo "$GEM_HOME")
+                if [ "$actual" != "${bundlerLayoutGemPath}" ]; then
+                  echo "hook deferred to a user's own GEM_HOME: $actual" >&2
+                  exit 1
+                fi
+
+                # A GEMS4NIX_GEM_HOME that names no environment must not be
+                # able to refuse a shell on its own. Refusing costs a shell, so
+                # a false positive is expensive by construction.
+                for junk in garbage-value /nix/store/00000000000000000000000000000000-gone/lib/ruby/gems/3.3.0; do
+                  actual=$(export GEMS4NIX_GEM_HOME="$junk"; . "$hook"; echo "$GEM_HOME")
+                  if [ "$actual" != "${bundlerLayoutGemPath}" ]; then
+                    echo "a GEMS4NIX_GEM_HOME of '$junk' was trusted; GEM_HOME came out as '$actual'" >&2
+                    exit 1
+                  fi
+                done
+
+                other="${otherGemPath}"
+                if (
+                  export GEM_HOME="$other" GEMS4NIX_GEM_HOME="$other"
+                  . "$hook"
+                ) 2>stderr.txt; then
+                  echo "a second gems4nix environment was accepted in silence" >&2
+                  exit 1
+                fi
+
+                for needle in "$other" "${bundlerLayoutGemPath}" "bundler/setup"; do
+                  if ! grep -qF "$needle" stderr.txt; then
+                    echo "the refusal does not mention $needle:" >&2
+                    cat stderr.txt >&2
+                    exit 1
+                  fi
+                done
+
+                touch $out
+              '';
+
+          # Measures what one git repository supplying two gems produces. Both
+          # gems write the same bundler/gems scope, which is what a real
+          # checkout of such a repository looks like.
+          bundler-git-repo-with-two-gems =
+            pkgs.runCommand "bundler-git-repo-with-two-gems" { }
+              ''
+                scope="${bundlerLayoutGemPath}/bundler/gems/widget-ruby-4f2e1c8a9b3d"
+                for entry in widget.gemspec sprocket.gemspec lib/widget.rb lib/sprocket.rb; do
+                  if [ ! -e "$scope/$entry" ]; then
+                    echo "the shared checkout is missing $entry:" >&2
+                    ls -R "$scope" >&2
+                    exit 1
+                  fi
+                done
+                touch $out
+              '';
 
           integration-platform-gems =
             pkgs.runCommand "integration-platform-gems"

@@ -17,6 +17,7 @@
 let
   defaultRuby = ruby;
   argHelpers = import ./arguments.nix { inherit lib; };
+  bundlerHelpers = import ./bundler.nix { inherit lib; };
 
   # function arguments:
   gemfileEnv =
@@ -223,6 +224,32 @@ let
               postInstall =
                 let
                   gemRoot = "$out/${ruby.gemPath}";
+                  # Bundler resolves a GIT-sourced gem only out of
+                  # bundler/gems/<scope>, so the RubyGems layout above leaves
+                  # it invisible to `require "bundler/setup"`. Give Bundler a
+                  # second view of the same gem rather than moving it: plain
+                  # `require` still has to work for a consumer that never
+                  # boots through Bundler.
+                  #
+                  # The entries are symlinked, and the serialized gemspec from
+                  # specifications/ is used in place of whatever the source
+                  # tree ships. That file evaluates anywhere, while a source
+                  # gemspec often shells out to `git ls-files` or reads a
+                  # sibling it no longer sits beside. Exactly one gemspec ends
+                  # up here, because Bundler loads every one it globs.
+                  #
+                  # This runs before any caller-supplied postInstall for the
+                  # same reason the empty-gem check does: an `exit` there must
+                  # not be able to leave a git gem Bundler cannot see.
+                  bundlerLayout = lib.optionalString (attrs.source.type == "git") ''
+                    gems4nixScope="${gemRoot}/bundler/gems/${bundlerHelpers.gitScope attrs.source}"
+                    mkdir -p "$gems4nixScope"
+                    for gems4nixEntry in "$gems4nixDir"/*; do
+                      case "$gems4nixEntry" in *.gemspec) continue ;; esac
+                      ln -s "../../../gems/${attrs.gemName}-${attrs.version}/$(basename "$gems4nixEntry")" "$gems4nixScope/"
+                    done
+                    cp "$gems4nixSpec" "$gems4nixScope/${attrs.gemName}.gemspec"
+                  '';
                 in
                 ''
                   gems4nixSpec="${gemRoot}/specifications/${attrs.gemName}-${attrs.version}.gemspec"
@@ -236,6 +263,7 @@ let
                     echo "  its gemspec probably computed an empty spec.files (git ls-files)." >&2
                     exit 1
                   fi
+                  ${bundlerLayout}
                   ${attrs.postInstall or ""}
                 '';
             }
@@ -283,12 +311,58 @@ let
       buildEnv {
         name = "${name}-${lib.strings.concatStringsSep "-" groups}-${lib.strings.concatStringsSep "-" resolvedPlatforms}";
         paths = finalGems;
-        postBuild = ''
-          mkdir -p $out/nix-support
-          cat > $out/nix-support/setup-hook <<EOF
-          export GEM_PATH="$out/${ruby.gemPath}\''${GEM_PATH:+:\$GEM_PATH}"
-          EOF
-        '';
+        # GEM_HOME is what decides where Bundler looks for a git gem: its
+        # install path is Gem.dir, and BUNDLE_PATH is not a substitute because
+        # Bundler appends ruby/<version> to that one. Setting it unconditionally
+        # rather than only when unset, because an inherited GEM_HOME is exactly
+        # the case where a git gem goes missing and nothing says why. The
+        # environment is read-only, so `gem install` into it fails; declare the
+        # gem in the Gemfile instead.
+        #
+        # GEM_PATH accumulates and GEM_HOME cannot, so two of these
+        # environments in one shell would leave the loser's git gems out of
+        # Bundler's reach while plain `require` still found them. That is the
+        # failure this whole layout exists to remove, one level up, so the
+        # second one refuses instead. GEMS4NIX_GEM_HOME is what distinguishes
+        # another gems4nix environment from a GEM_HOME the user brought, which
+        # is overridden without comment. It has to name a directory that is
+        # really there, because refusing costs a shell and a stray export
+        # should not be able to do that.
+        #
+        # Both variables describe a build environment. Nothing here bakes
+        # either into an output, and a build recipe that captures one is
+        # recording the machine it ran on.
+        postBuild =
+          let
+            gemHome = "$out/${ruby.gemPath}";
+          in
+          ''
+            mkdir -p $out/nix-support
+            cat > $out/nix-support/setup-hook <<EOF
+            gems4nixGemHome="${gemHome}"
+            EOF
+            cat >> $out/nix-support/setup-hook <<'HOOK'
+            gems4nixOther="''${GEMS4NIX_GEM_HOME-}"
+            case "''$gems4nixOther" in
+              /nix/store/*) [ -d "''$gems4nixOther" ] || gems4nixOther="" ;;
+              *) gems4nixOther="" ;;
+            esac
+            if [ -n "''$gems4nixOther" ] && [ "''$gems4nixOther" != "''$gems4nixGemHome" ]; then
+              echo 'gems4nix: two gems4nix environments are on this shell, and GEM_HOME can only name one.' >&2
+              echo "  already here: ''$gems4nixOther" >&2
+              echo "  and now:      ''$gems4nixGemHome" >&2
+              echo 'Bundler reads a git gem only from bundler/gems under GEM_HOME, so the git gems of' >&2
+              echo 'whichever environment loses go missing from require "bundler/setup" while a plain' >&2
+              echo 'require still finds them. Build one gemfileEnv from both Gemfiles, or keep the two' >&2
+              echo 'environments in separate shells.' >&2
+              exit 1
+            fi
+            export GEMS4NIX_GEM_HOME="''$gems4nixGemHome"
+            export GEM_HOME="''$gems4nixGemHome"
+            export GEM_PATH="''$gems4nixGemHome''${GEM_PATH:+:''$GEM_PATH}"
+            unset gems4nixGemHome gems4nixOther
+            HOOK
+          '';
       }
     );
 in

@@ -29,7 +29,8 @@ Add gems4nix to your flake inputs, apply the overlay, and call `gemfileEnv`:
         gemfileLock = ./Gemfile.lock;
       };
     in {
-      # Use `gems` in buildInputs, set GEM_PATH, etc.
+      # Put `gems` in buildInputs or a devShell's packages: its setup hook
+      # exports GEM_HOME and GEM_PATH.
     };
 }
 ```
@@ -108,7 +109,13 @@ A `GIT` or `PATH` section carries `glob:`, which selects one gemspec out of seve
 A `GIT` or `PATH` section carries an option gems4nix does not recognise. Most such options change which files the gem is built from, so ignoring one means building something other than what the lockfile describes. The recognised `GIT` keys are `remote`, `revision`, `ref`, `branch`, `tag`, `submodules` and `glob`; a `PATH` section takes `remote` and `glob`. `glob` is recognised and then refused, with the dedicated message above, which is why it appears on both lists rather than falling to this one. If the key is one Bundler genuinely writes, that is a gap worth an issue — quote the section verbatim.
 
 **"Bundler::GitError: ... is not yet checked out. Run `bundle install` first."**
-Your app boots through `require "bundler/setup"` and one of its gems comes from a `GIT` section. Bundler looks for a git gem in a directory gems4nix does not write. There is no workaround short of vendoring the gem as a `PATH` source. See [Known Limitations](#known-limitations).
+Your app boots through `require "bundler/setup"`, one of its gems comes from a `GIT` section, and Bundler is not looking inside the gems4nix environment. gems4nix writes the checkout Bundler wants, under the environment's `GEM_HOME`; what usually goes wrong is that something else set `GEM_HOME` afterwards, or the environment was never on the build's `buildInputs` in the first place. Print `Bundler.bundle_path` and check it is the store path holding your gems. See [Booting through `require "bundler/setup"`](#booting-through-require-bundlersetup).
+
+**"gems4nix: two gems4nix environments are on this shell, and GEM_HOME can only name one."**
+Two `gemfileEnv` results are on one shell's inputs, and the second one's setup hook refused rather than take `GEM_HOME` off the first. `GEM_PATH` would have held both, so plain `require` would have kept working while Bundler lost sight of one environment's git gems, which is the failure the refusal exists to prevent. Build one `gemfileEnv` from both `Gemfile`s, or put the two environments in separate shells. The message names both paths. Under direnv you will see this message followed by `Falling back to previous environment!`, and your command will run in the previous environment rather than stopping.
+
+**"Gem::FilePermissionError" from `gem install` or `bundle install`**
+`GEM_HOME` points into `/nix/store`, which is read-only, because that is where Bundler has to look for a git gem. Add the gem to the `Gemfile` and rebuild the environment. If a shell genuinely needs a writable gem directory for something else, set `GEM_HOME` again after the environment's setup hook has run, and accept that Bundler will no longer find any git gem in it.
 
 **"could not read Username for 'https://github.com'" while evaluating**
 A private `GIT` remote is fetched by `builtins.fetchGit`, which shells out to your own `git`, and https with no credential helper cannot authenticate. A `url."git@github.com:".insteadOf "https://github.com/"` rewrite in your git config works. `credentials` does not apply here: it covers private gem registries, not git remotes.
@@ -248,11 +255,13 @@ gemfileEnv {
 
 A `PATH` source that does not exist under `root` is an evaluation error naming `root`, not a silent skip.
 
-### Git gems do not work under `require "bundler/setup"`
+### Booting through `require "bundler/setup"`
 
 Read this before putting a git gem in a Rails app.
 
-gems4nix installs a git gem as an ordinary gem, so plain `require` finds it through the `GEM_PATH`. Bundler does not. `Bundler::Source::Git` looks for a git gem in `bundler/gems/<name>-<shortrev>` under Bundler's install path — `GEM_HOME` unless `BUNDLE_PATH` says otherwise — and nowhere else. So an app that boots with `require "bundler/setup"`, which is every stock Rails app, fails on the git gem:
+A `GEM` or `PATH` gem needs nothing here. Bundler resolves a rubygems gem through `Gem::Specification`, which reads the `GEM_PATH`, and it reads a path gem's gemspec straight out of its source directory.
+
+A `GIT` gem is different. `Bundler::Source::Git` reads it from `bundler/gems/<repo>-<shortrev>` under Bundler's install path and nowhere else, so an environment holding only the RubyGems layout raises:
 
 ```
 bundler/source/git.rb:236:in `rescue in load_spec_files':
@@ -260,11 +269,31 @@ bundler/source/git.rb:236:in `rescue in load_spec_files':
   checked out. Run `bundle install` first. (Bundler::GitError)
 ```
 
-That transcript is bundler 2.5.22; the line number moves between releases, and the raise sits in `load_spec_files` either way.
+gems4nix writes that directory as well, alongside the ordinary gem, so both `require "errgonomic"` and `require "bundler/setup"` work. The directory is named the way Bundler names it: after the *repository*, which is routinely not the gem's name, and twelve characters of the locked revision.
 
-Gems from `GEM` and `PATH` sections are unaffected. Bundler resolves a rubygems gem through `Gem::Specification`, which reads the `GEM_PATH`, and it reads a path gem's gemspec straight out of its directory. Only `GIT` sources break.
+Two things have to be true at runtime, and the environment's setup hook handles the first:
 
-Until this is fixed, vendor the gem and depend on it as a `PATH` source, or publish it to a registry. A vendored path gem loads under `bundler/setup` with no `bundle install`.
+- **`GEM_HOME` points at the environment.** Bundler's install path is `Gem.dir`, so a `GEM_HOME` left pointing at `~/.local/share/gem` sends Bundler looking for the checkout there. Putting the environment in `buildInputs`, or in a `devShell`'s `packages`, is enough: the hook exports both `GEM_HOME` and `GEM_PATH`. Setting `BUNDLE_PATH` instead does not work: Bundler appends `ruby/<version>` to that one.
+- **`BUNDLE_GEMFILE` names a `Gemfile` with its `Gemfile.lock` beside it**, and with any `PATH` source's directory where the lockfile's `remote:` says. Bundler finds these on its own for an app run from its own directory. Setting `BUNDLE_FROZEN=1` alongside is worth it: without it a lockfile Bundler disagrees with is rewritten at boot rather than reported.
+
+Because `GEM_HOME` is a read-only store path, `gem install` and `bundle install` into the environment fail with `Gem::FilePermissionError`. That is the point. Declare the gem in the `Gemfile` and rebuild. A shell that needs a writable gem directory for something else has to set `GEM_HOME` again after the hook has run, and gives up Bundler's view of any git gem by doing so.
+
+One `Gemfile` per shell. `GEM_PATH` accumulates across environments and `GEM_HOME` cannot, so two gems4nix environments in one shell would leave one of them with git gems that plain `require` finds and Bundler does not. The second environment's hook refuses instead, printing both paths and the consequence. Build one `gemfileEnv` from both `Gemfile`s, or keep the environments in separate shells.
+
+What the refusal does depends on how you enter the environment, and it is weaker under direnv than anywhere else. Measured:
+
+| Entry path | What happens |
+|---|---|
+| `nix build`, `nix flake check`, CI | The build fails with the message as its last log lines. |
+| `nix develop` | No shell opens; the message is the failure's last log lines. |
+| `nix print-dev-env` | Exits non-zero with empty stdout and the message on stderr. |
+| `direnv` / nix-direnv | The message is printed, then `direnv: nix-direnv: Evaluating current devShell failed. Falling back to previous environment!` and **your command runs anyway**, in the last environment that loaded — or in no gems4nix environment at all, if none ever did. |
+
+The direnv row is nix-direnv's policy for any devShell that fails to evaluate, not something a setup hook can opt out of: the fallback happens precisely because the hook failed. So a direnv user gets a printed explanation and a stale environment rather than a stop. The stale one is the last environment that worked, which is usually the state you want anyway, but it does not match your `flake.nix` until you fix the conflict. Run `nix develop` to see the message on its own.
+
+The hook tells another gems4nix environment from a `GEM_HOME` you set yourself by an extra variable it exports, `GEMS4NIX_GEM_HOME`; a `GEM_HOME` of your own is overridden without comment. That variable has to name a directory in the Nix store that is really there before the hook will believe it, so a stray or stale export cannot cost you a shell. Both it and `GEM_HOME` describe a build environment and nothing more: gems4nix never bakes either into an output, and a build recipe that captures one is recording the machine it ran on.
+
+A single git repository supplying several gems works, and the gems share one checkout directory the way a real `bundle install` would leave them: each gem contributes its own gemspec and its own files to `bundler/gems/<repo>-<shortrev>`. Two such gems shipping the *same* file path is the one case that fails, and it fails during the environment build with `pkgs.buildEnv error: two given paths contain a conflicting subpath` followed by a hint about "two different versions of the same package". That hint is misleading here: the two paths are two different gems out of one repository, not two versions of one gem.
 
 A lockfile gems4nix cannot honour is an evaluation error rather than a gem missing from the environment: a hashless `CHECKSUMS` line no source claims, a `PLUGIN SOURCE` section, a `glob:` option, and any unrecognised key on a `GIT` or `PATH` section all throw and name what they found. Each has its own entry under [Common Errors and Solutions](#common-errors-and-solutions), with the message as thrown and what to do about it.
 
@@ -408,7 +437,9 @@ map.
 
 ## Known Limitations
 
-- **A git gem is invisible to `require "bundler/setup"`.** gems4nix installs it as an ordinary gem, so plain `require` finds it on the `GEM_PATH`. Bundler looks for a git gem in `bundler/gems/<name>-<shortrev>` under its own install path, which gems4nix never writes, and raises `Bundler::GitError: ... is not yet checked out. Run 'bundle install' first.` Every stock Rails app boots that way. Gems from `GEM` and `PATH` sections are unaffected; vendoring the gem as a path source is the workaround.
+- **`GEM_HOME` is set, not appended.** The environment's setup hook exports `GEM_HOME` unconditionally, because a `GEM_HOME` that silently wins is how a git gem goes missing with nothing to say why. Two consequences: `gem install` from a shell holding a gems4nix environment now fails with `Gem::FilePermissionError` where it previously installed into the user's own gem directory, and two gems4nix environments in one shell are refused rather than one quietly losing. Both are described under [Booting through `require "bundler/setup"`](#booting-through-require-bundlersetup).
+- **That refusal does not stop a direnv user.** It stops `nix build`, `nix develop`, `nix print-dev-env` and CI. Under nix-direnv the message is printed and then the previous environment is served and the command runs, because nix-direnv falls back on any devShell evaluation failure. Nothing a setup hook can do survives that fallback, since the fallback is triggered by the hook failing; a warning that let the environment build would be worse, because it would hand you the conflicting environment instead of the last working one. Measured with direnv 2.37.1 and nix-direnv 3.1.2.
+- **A git gem with a native extension is not usable under `bundler/setup`.** RubyGems installs the compiled extension to `extensions/<arch>/<api>/<gem>-<version>`, and Bundler asks a git-sourced spec for `extensions/<arch>/<api>/<repo>-<shortrev>` instead. The two names never meet, so the `.so` is missing from the load path. Measured on both sides, not yet exercised end to end: no example has a git gem with a C extension. A pure-Ruby git gem is unaffected.
 - **A git gem with a native extension cannot see its build-time siblings.** `buildRubyGem` takes those through `gemPath`, and gems4nix does not set it. This is not specific to git gems, but a git gem is where it bites first.
 - **`builtins.fetchGit` runs at evaluation time.** Any command that evaluates an output holding a git gem needs the network then, and needs credentials then for a private repository. The result is not a fixed-output derivation, so no binary cache can serve it. `gemSrcOverrides` is the way out.
 - **A private git remote depends on the invoking user's git configuration**, which is a different axis from `credentials` above. `credentials` covers private *registries* fetched over `fetchurl`; a git remote is fetched by the user's own `git`. A `url.<ssh>.insteadOf` rewrite works. A bare https remote fails with `could not read Username`. Nix's `access-tokens` and `netrc-file` settings configure Nix's downloader, not this `git`, so neither applies.

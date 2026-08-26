@@ -162,49 +162,37 @@ let
   # Limitations with no test. Each says why, and what a test would need.
   nonTests = {
 
-    git_gems_are_invisible_to_bundler_setup = ''
+    git_gems_with_native_extensions_are_unusable_under_bundler = ''
       LIMITATION
-      A git gem installs as an ordinary gem, so plain `require` finds it
-      through the GEM_PATH. Bundler does not. Bundler::Source::Git#load_spec_files
-      looks in bundler/gems/<name>-<shortrev> under Bundler's install path, which
-      is GEM_HOME unless BUNDLE_PATH says otherwise, and nowhere else. gems4nix
-      never writes that directory. So an app booting with `require "bundler/setup"`
-      cannot use a git gem from gems4nix. That is every stock Rails app.
+      A git gem gets the bundler/gems/<repo>-<shortrev> checkout Bundler reads
+      it from, so `require "bundler/setup"` resolves it. A compiled extension
+      inside such a gem does not follow.
 
-      Gems from GEM and PATH sections are unaffected. Bundler resolves a
-      rubygems gem through Gem::Specification, which reads the GEM_PATH, and it
-      reads a path gem's gemspec out of its source directory. Only GIT sources
-      break. Vendoring the gem as a PATH source is the workaround.
+      RubyGems installs one to extensions/<arch>/<api>/<gem>-<version>;
+      measured against examples/complex, which holds bootsnap-1.23.0,
+      msgpack-1.8.0 and nio4r-2.7.5 named exactly that way. Bundler asks a
+      git-sourced spec for a different directory: rubygems_ext.rb defines
+      extension_dir as extensions_dir joined with
+      [source.extension_dir_name, File.basename(full_gem_path)].uniq.join("-"),
+      and both of those are the git scope, so it collapses to
+      extensions/<arch>/<api>/<repo>-<shortrev>. The two names never meet and
+      the .so is absent from the load path.
 
-      REPRO
-      Against examples/complex, whose errgonomic comes from a GIT section.
-      Build the environment, then with GEM_PATH pointing into it:
-
-        ruby -e 'require "errgonomic"'
-        => loads
-
-        BUNDLE_GEMFILE=examples/complex/Gemfile ruby -e 'require "bundler/setup"'
-        => bundler/source/git.rb:236:in `rescue in load_spec_files':
-           https://github.com/omc/errgonomic.git (at main@f06314a) is not yet
-           checked out. Run `bundle install` first. (Bundler::GitError)
-
-      That transcript is bundler 2.5.22. The line number moves between
-      releases; the raise sits in load_spec_files either way.
-
-      For the other half, a separate Gemfile holding only a path gem loads
-      under the same `require "bundler/setup"`, with no built environment and
-      no `bundle install`. That asymmetry is the whole finding.
+      This is separate from the gemPath limitation below, which is about a
+      build-time header rather than a runtime load path.
 
       WHY NO TEST
-      Nothing here is a branch in gems4nix's own code, and no assertion in a
-      Nix expression can reach it. Showing it needs a built environment, a
-      ruby, and Bundler reading a Gemfile. Pure evaluation has none of those.
+      Both halves are measured, but nothing here has been run end to end: no
+      example or fixture has a git gem with a C extension, and inventing one
+      means a real repository, since a hand-written lockfile cannot fake a GIT
+      section Bundler will accept.
 
       WHAT A TEST WOULD LOOK LIKE
-      A second check in examples/complex beside `validate`, running
-      `require "bundler/setup"` against the built environment with
-      BUNDLE_GEMFILE set. It fails today. Write it as the thing that proves
-      binstub support worked, and promote it out of this file then.
+      A git gem with a trivial C extension in examples/complex, required from
+      the bundler-setup check. The fix it would drive is a second symlink
+      beside the checkout, from extensions/<arch>/<api>/<repo>-<shortrev> to
+      the directory RubyGems wrote. The <arch>/<api> pair is not knowable
+      during evaluation, so it has to be globbed in the build.
     '';
 
     native_extensions_cannot_see_their_siblings = ''
@@ -260,6 +248,17 @@ let
       a Gemfile naming only the first. Hand-editing a lockfile to fake the edge
       does not work: `bundle lock` regenerates it and the fixture stops being
       reproducible. That is a new repository, not a change to an example.
+
+      A GIT section supplying two gems is no longer the hard part.
+      test/integration/bundler-layout has one, offline, with gemSrcOverrides
+      standing in for the fetch, and measured against it the two gems share a
+      single bundler/gems/<repo>-<shortrev> directory: each contributes its own
+      gemspec and its own files, and buildEnv merges them, which is what a real
+      checkout of such a repository looks like. Two gems shipping the same file
+      path is the exception, and it fails the environment build with
+      `pkgs.buildEnv error: two given paths contain a conflicting subpath`.
+      What is still missing is the group edge, and that needs the real IFD
+      rather than the gemGroups override the fixture uses.
     '';
 
     non_github_git_servers = ''
